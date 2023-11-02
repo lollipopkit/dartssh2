@@ -169,7 +169,6 @@ class SSHChannelController {
   }
 
   void handleMessage(SSHMessage message) {
-    print(message);
     if (message is SSH_Message_Channel_Data) {
       _handleDataMessage(message.data);
     } else if (message is SSH_Message_Channel_Extended_Data) {
