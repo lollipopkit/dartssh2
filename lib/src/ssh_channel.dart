@@ -60,7 +60,7 @@ class SSHChannelController {
   /// A [StreamController] that accepts data from local end of the channel.
   final _localStream = StreamController<SSHChannelData>();
 
-  late final _locaStreamConsumer = SSHChannelDataConsumer(_localStream.stream);
+  late final _localStreamConsumer = SSHChannelDataConsumer(_localStream.stream);
 
   /// Handler of channel requests from the remote side.
   late var _requestHandler = _defaultRequestHandler;
@@ -195,7 +195,7 @@ class SSHChannelController {
   Future<void> close() async {
     if (_done.isCompleted) return;
 
-    _locaStreamConsumer.cancel();
+    _localStreamConsumer.cancel();
     _sendEOFIfNeeded();
 
     if (_remoteStream.isClosed) {
@@ -213,7 +213,7 @@ class SSHChannelController {
   void destroy() {
     if (_done.isCompleted) return;
     _remoteStream.close();
-    _locaStreamConsumer.cancel();
+    _localStreamConsumer.cancel();
     _sendEOFIfNeeded();
     _sendCloseIfNeeded();
     _done.complete();
@@ -275,7 +275,7 @@ class SSHChannelController {
   }
 
   void _handleCloseMessage() {
-    printDebug?.call('SSHChannel._handleCLoseMessage');
+    printDebug?.call('SSHChannel._handleCloseMessage');
     _remoteStream.close();
     close();
   }
@@ -335,7 +335,7 @@ class SSHChannelController {
       }
 
       final dataToRead = min(_remoteWindow, remoteMaximumPacketSize);
-      final data = await _locaStreamConsumer.read(dataToRead);
+      final data = await _localStreamConsumer.read(dataToRead);
 
       if (data == null) {
         _sendEOFIfNeeded();

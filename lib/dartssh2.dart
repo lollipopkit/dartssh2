@@ -7,6 +7,7 @@ export 'src/ssh_pem.dart';
 export 'src/ssh_session.dart';
 export 'src/ssh_signal.dart';
 export 'src/ssh_transport.dart';
+export 'src/ssh_userauth.dart' show SSHUserInfoRequest, SSHUserInfoPrompt;
 
 export 'src/socket/ssh_socket.dart';
 
