@@ -184,6 +184,15 @@ class SSHTransport {
     if (isClosed) {
       throw SSHStateError('Transport is closed');
     }
+
+    _bytesSinceLastKex += data.length;
+    final now = DateTime.now();
+
+    if (_bytesSinceLastKex >= _kexRenegotiationThreshold ||
+        now.difference(_lastKexTime) >= _kexRenegotiationInterval) {
+      requestKeyReExchange();
+    }
+
     final packetAlign = _encryptCipher == null
         ? SSHPacket.minAlign
         : max(SSHPacket.minAlign, _encryptCipher!.blockSize);
@@ -656,6 +665,8 @@ class SSHTransport {
   void _handleMessageKexInit(Uint8List payload) {
     printDebug?.call('SSHTransport._handleMessageKexInit');
 
+    _kexInProgress = true;
+
     final message = SSH_Message_KexInit.decode(payload);
     printTrace?.call('<- $socket: $message');
     _remoteKexInit = payload;
@@ -844,6 +855,7 @@ class SSHTransport {
           _hostkeyVerified = true;
           _sendNewKeys();
           _applyLocalKeys();
+          _finalizeKeyExchange();
           onReady?.call();
         }
       },
@@ -868,5 +880,37 @@ class SSHTransport {
     printDebug?.call('SSHTransport._handleMessageNewKeys');
     printTrace?.call('<- $socket: SSH_Message_NewKeys');
     _applyRemoteKeys();
+    _finalizeKeyExchange();
+  }
+
+  // 标记是否正在进行密钥交换
+  bool _kexInProgress = false;
+
+  // 上次密钥交换的时间
+  DateTime _lastKexTime = DateTime.now();
+
+  // 自上次密钥交换以来传输的字节数
+  int _bytesSinceLastKex = 0;
+
+  // 触发重新协商的字节数阈值（例如 1GB）
+  static const _kexRenegotiationThreshold = 1024 * 1024 * 1024;
+
+  // 触发重新协商的时间阈值（例如 1小时）
+  static const _kexRenegotiationInterval = Duration(hours: 1);
+
+  void requestKeyReExchange() {
+    if (_kexInProgress) return;
+
+    printDebug?.call('Requesting key re-exchange');
+    _kexInProgress = true;
+    _sendKexInit();
+  }
+
+  void _finalizeKeyExchange() {
+    _kexInProgress = false;
+    _bytesSinceLastKex = 0;
+    _lastKexTime = DateTime.now();
+    
+    printDebug?.call('Key exchange completed');
   }
 }
