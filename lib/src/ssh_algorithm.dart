@@ -70,6 +70,7 @@ class SSHAlgorithms {
     ],
     this.mac = const [
       SSHMacType.hmacSha1,
+      SSHMacType.hmacSha196,
       SSHMacType.hmacSha256,
       SSHMacType.hmacSha512,
       SSHMacType.hmacMd5,

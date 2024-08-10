@@ -16,6 +16,12 @@ class SSHMacType with SSHAlgorithm {
     macFactory: _hmacSha1Factory,
   );
 
+  static const hmacSha196 = SSHMacType._(
+    name: 'hmac-sha1-96', 
+    keySize: 20,
+    macFactory: _hmacSha196Factory,
+  );
+
   static const hmacSha256 = SSHMacType._(
     name: 'hmac-sha2-256',
     keySize: 32,
@@ -63,10 +69,29 @@ Mac _hmacSha1Factory() {
   return HMac(SHA1Digest(), 64);
 }
 
+Mac _hmacSha196Factory() {
+  return _HMACSHA196(SHA1Digest(), 64);
+}
+
 Mac _hmacSha256Factory() {
   return HMac(SHA256Digest(), 64);
 }
 
 Mac _hmacSha512Factory() {
   return HMac(SHA512Digest(), 128);
+}
+
+class _HMACSHA196 extends HMac {
+  _HMACSHA196(super.digest, super.blockSize);
+
+  @override
+  int doFinal(Uint8List out, int outOff) {
+    var result = Uint8List(20);
+    super.doFinal(result, 0);
+    out.setRange(outOff, outOff + 12, result);
+    return 12;
+  }
+
+  @override
+  int get macSize => 12;
 }
