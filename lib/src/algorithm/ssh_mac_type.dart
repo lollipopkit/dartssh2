@@ -34,10 +34,25 @@ class SSHMacType with SSHAlgorithm {
     macFactory: _hmacSha512Factory,
   );
 
+  static const hmacSha1Etm = SSHMacType._(
+    name: 'hmac-sha1-etm@openssh.com',
+    keySize: 20,
+    macFactory: _hmacSha1Factory,
+    isEtm: true,
+  );
+
+  static const hmacSha256Etm = SSHMacType._(
+    name: 'hmac-sha2-256-etm@openssh.com',
+    keySize: 32,
+    macFactory: _hmacSha256Factory,
+    isEtm: true,
+  );
+
   const SSHMacType._({
     required this.name,
     required this.keySize,
     required this.macFactory,
+    this.isEtm = false,
   });
 
   /// The name of the algorithm. For example, `"aes256-ctr`"`.
@@ -49,6 +64,8 @@ class SSHMacType with SSHAlgorithm {
   final int keySize;
 
   final Mac Function() macFactory;
+
+  final bool isEtm;
 
   Mac createMac(Uint8List key) {
     if (key.length != keySize) {

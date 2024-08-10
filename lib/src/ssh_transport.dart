@@ -110,9 +110,6 @@ class SSHTransport {
   /// Contains unprocessed data from the socket.
   final _buffer = ChunkBuffer();
 
-  /// Contains decrypted packet data. May be partial.
-  final _decryptBuffer = ChunkBuffer();
-
   /// Subscription to the socket's [Stream]. It should be closed when the
   /// transport is closed.
   StreamSubscription? _socketSubscription;
@@ -199,18 +196,27 @@ class SSHTransport {
 
     final packet = SSHPacket.pack(data, align: packetAlign);
 
-    if (_encryptCipher == null) {
-      socket.sink.add(packet);
-    } else {
-      final mac = _localMac!;
-      mac.updateAll(_localPacketSN.value.toUint32());
-      mac.updateAll(packet);
+    final encryptedPacket =
+        _encryptCipher != null ? _encryptCipher!.processAll(packet) : packet;
+
+    final mac = _localMac;
+    if (mac != null) {
+      if (isEtm) {
+        mac.updateAll(_localPacketSN.value.toUint32());
+        mac.updateAll(encryptedPacket);
+      } else {
+        mac.updateAll(_localPacketSN.value.toUint32());
+        mac.updateAll(packet);
+      }
+      final macBytes = mac.finish();
 
       final buffer = BytesBuilder(copy: false);
-      buffer.add(_encryptCipher!.processAll(packet));
-      buffer.add(mac.finish());
+      buffer.add(encryptedPacket);
+      buffer.add(macBytes);
 
       socket.sink.add(buffer.takeBytes());
+    } else {
+      socket.sink.add(encryptedPacket);
     }
 
     _localPacketSN.increase();
@@ -367,38 +373,37 @@ class SSHTransport {
   Uint8List? _consumeEncryptedPacket() {
     printDebug?.call('SSHTransport._consumeEncryptedPacket');
 
+    final mac = _remoteMac;
+    if (mac == null) {
+      return _consumeClearTextPacket();
+    }
+
     final blockSize = _decryptCipher!.blockSize;
+    final macSize = mac.macSize;
+
     if (_buffer.length < blockSize) {
       return null;
     }
 
-    if (_decryptBuffer.isEmpty) {
-      final firstBlock = _buffer.consume(blockSize);
-      _decryptBuffer.add(_decryptCipher!.process(firstBlock));
+    var encryptedPacket = _buffer.consume(_buffer.length - macSize);
+    var macBytes = _buffer.consume(macSize);
+
+    if (isEtm) {
+      mac.updateAll(_remotePacketSN.value.toUint32());
+      mac.updateAll(encryptedPacket);
+      _verifyMac(mac.finish(), macBytes);
+
+      var decryptedPacket = _decryptCipher!.processAll(encryptedPacket);
+      return _extractPayload(decryptedPacket);
+    } else {
+      var decryptedPacket = _decryptCipher!.processAll(encryptedPacket);
+
+      mac.updateAll(_remotePacketSN.value.toUint32());
+      mac.updateAll(decryptedPacket);
+      _verifyMac(mac.finish(), macBytes);
+
+      return _extractPayload(decryptedPacket);
     }
-
-    final packetLength = SSHPacket.readPacketLength(_decryptBuffer.data);
-    _verifyPacketLength(packetLength);
-
-    final macLength = _remoteMac!.macSize;
-    if (_buffer.length + _decryptBuffer.length < 4 + packetLength + macLength) {
-      return null;
-    }
-
-    while (_decryptBuffer.length < 4 + packetLength) {
-      final block = _buffer.consume(blockSize);
-      _decryptBuffer.add(_decryptCipher!.process(block));
-    }
-
-    final packet = _decryptBuffer.consume(packetLength + 4);
-    final paddingLength = SSHPacket.readPaddingLength(packet);
-    final payloadLength = packetLength - paddingLength - 1;
-    _verifyPacketPadding(payloadLength, paddingLength);
-
-    final mac = _buffer.consume(macLength);
-    _verifyPacketMac(packet, mac);
-
-    return Uint8List.sublistView(packet, 5, packet.length - paddingLength);
   }
 
   void _verifyPacketLength(int packetLength) {
@@ -422,25 +427,6 @@ class SSHTransport {
     if (paddingLength < minPaddingLength) {
       throw SSHPacketError(
         'Invalid padding length: $paddingLength, expected: $minPaddingLength',
-      );
-    }
-  }
-
-  /// Verifies that the MAC of the packet is correct. Throws [SSHPacketError]
-  /// if the MAC is incorrect.
-  void _verifyPacketMac(Uint8List payload, Uint8List actualMac) {
-    final macSize = _remoteMac!.macSize;
-    if (actualMac.length != macSize) {
-      throw ArgumentError.value(actualMac, 'mac', 'Invalid MAC size');
-    }
-
-    _remoteMac!.updateAll(_remotePacketSN.value.toUint32());
-    _remoteMac!.updateAll(payload);
-    final expectedMac = _remoteMac!.finish();
-
-    if (!expectedMac.equals(actualMac)) {
-      throw SSHPacketError(
-        'MAC mismatch, expected: $expectedMac, actual: $actualMac',
       );
     }
   }
@@ -478,6 +464,7 @@ class SSHTransport {
     );
 
     _localMac = macType.createMac(macKey);
+    isEtm = macType.isEtm;
   }
 
   void _applyRemoteKeys() {
@@ -504,6 +491,7 @@ class SSHTransport {
       macType.keySize,
     );
     _remoteMac = macType.createMac(macKey);
+    isEtm = macType.isEtm;
   }
 
   Uint8List _deriveKey(SSHDeriveKeyType keyType, int keySize) {
@@ -910,7 +898,22 @@ class SSHTransport {
     _kexInProgress = false;
     _bytesSinceLastKex = 0;
     _lastKexTime = DateTime.now();
-    
+
     printDebug?.call('Key exchange completed');
   }
+
+  Uint8List _extractPayload(Uint8List packet) {
+    final packetLength = SSHPacket.readPacketLength(packet);
+    final paddingLength = SSHPacket.readPaddingLength(packet);
+    final payloadLength = packetLength - paddingLength - 1;
+    return Uint8List.sublistView(packet, 5, 5 + payloadLength);
+  }
+
+  void _verifyMac(Uint8List expected, Uint8List actual) {
+    if (!expected.equals(actual)) {
+      throw SSHPacketError('MAC verification failed');
+    }
+  }
+
+  bool isEtm = false;
 }
