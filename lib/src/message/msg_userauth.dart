@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:dartssh2/src/ssh_message.dart';
 import 'package:dartssh2/src/ssh_userauth.dart';
 
+import 'package:unorm_dart/unorm_dart.dart' as unorm;
+
 class SSH_Message_Userauth_Request extends SSHMessage {
   static const messageId = 50;
 
@@ -46,10 +48,12 @@ class SSH_Message_Userauth_Request extends SSHMessage {
     required String password,
     String serviceName = 'ssh-connection',
   }) {
+    // Normalize password using SASLprep
+    final normalizedPassword = unorm.nfkc(password);
     return SSH_Message_Userauth_Request(
       serviceName: serviceName,
       user: user,
-      password: password,
+      password: normalizedPassword,
       methodName: 'password',
     );
   }

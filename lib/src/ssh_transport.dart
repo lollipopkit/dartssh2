@@ -12,6 +12,8 @@ import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
 import 'package:dartssh2/src/kex/kex_dh.dart';
 import 'package:dartssh2/src/kex/kex_nist.dart';
 import 'package:dartssh2/src/kex/kex_x25519.dart';
+import 'package:dartssh2/src/message/msg_ignore.dart';
+import 'package:dartssh2/src/message/msg_unimpl.dart';
 import 'package:dartssh2/src/message/msg_userauth.dart';
 import 'package:dartssh2/src/socket/ssh_socket.dart';
 import 'package:dartssh2/src/ssh_algorithm.dart';
@@ -642,8 +644,12 @@ class SSHTransport {
         return _handleMessageKexReply(message);
       case SSH_Message_NewKeys.messageId:
         return _handleMessageNewKeys(message);
+      case SSH_Message_Ignore.messageId:
+        return;
       default:
         onPacket?.call(message);
+        final unimplMsg = SSH_Message_Unimplemented(_remotePacketSN.value);
+        sendPacket(unimplMsg.encode());
     }
   }
 
