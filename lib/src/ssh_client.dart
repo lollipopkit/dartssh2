@@ -658,6 +658,17 @@ class SSHClient {
     final message = SSH_Message_Channel_Open.decode(payload);
     printTrace?.call('<- $socket: $message');
 
+    // Check if the channel number is within the allowed range
+    if (message.senderChannel > 0xFFFFFF) {
+      final reply = SSH_Message_Channel_Open_Failure(
+        recipientChannel: message.senderChannel,
+        reasonCode: SSH_Message_Channel_Open_Failure.codeResourceShortage,
+        description: 'Channel number out of range',
+      );
+      _sendMessage(reply);
+      return;
+    }
+
     switch (message.channelType) {
       case 'forwarded-tcpip':
         return _handleForwardedTcpipChannelOpen(message);
