@@ -290,6 +290,8 @@ class SSHTransport {
       if (index == -1) {
         throw SSHHandshakeError('Version exchange not terminated');
       }
+      printDebug
+          ?.call('Non-standard version string termination (LF only) detected');
       _buffer.consume(index + 1);
     } else {
       _buffer.consume(index + 2);
@@ -702,6 +704,11 @@ class SSHTransport {
       isServer: isServer,
     );
 
+    if (!message.compressionServerToClient.contains('none') ||
+        !message.compressionClientToServer.contains('none')) {
+      printDebug?.call('Compression negotiated but not supported');
+    }
+
     if (_kexType == null) {
       throw StateError('No matching key exchange algorithm');
     }
@@ -883,19 +890,19 @@ class SSHTransport {
     _finalizeKeyExchange();
   }
 
-  // 标记是否正在进行密钥交换
+  /// Whether a key exchange is in progress.
   bool _kexInProgress = false;
 
-  // 上次密钥交换的时间
+  /// Time of the last key exchange.
   DateTime _lastKexTime = DateTime.now();
 
-  // 自上次密钥交换以来传输的字节数
+  /// Number of bytes sent since the last key exchange.
   int _bytesSinceLastKex = 0;
 
-  // 触发重新协商的字节数阈值（例如 1GB）
+  /// In openssh, the key re-exchange threshold is 1GB.
   static const _kexRenegotiationThreshold = 1024 * 1024 * 1024;
 
-  // 触发重新协商的时间阈值（例如 1小时）
+  /// In openssh, the key re-exchange interval is 1 hour.
   static const _kexRenegotiationInterval = Duration(hours: 1);
 
   void requestKeyReExchange() {
@@ -910,7 +917,7 @@ class SSHTransport {
     _kexInProgress = false;
     _bytesSinceLastKex = 0;
     _lastKexTime = DateTime.now();
-    
+
     printDebug?.call('Key exchange completed');
   }
 }

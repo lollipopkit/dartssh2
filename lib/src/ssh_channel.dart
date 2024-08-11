@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/ssh_channel_id.dart';
+import 'package:dartssh2/src/ssh_packet.dart';
 import 'package:dartssh2/src/ssh_transport.dart';
 import 'package:dartssh2/src/utils/async_queue.dart';
 import 'package:dartssh2/src/message/msg_channel.dart';
@@ -41,6 +42,14 @@ class SSHChannelController {
     required this.sendMessage,
     this.printDebug,
   }) {
+    // RFC 4254 Section 5.2
+    if (localMaximumPacketSize > SSHPacket.maxLength) {
+      throw ArgumentError.value(
+        localMaximumPacketSize,
+        'localMaximumPacketSize',
+        'must not be larger than transport maximum packet size',
+      );
+    }
     if (remoteInitialWindowSize > 0) {
       _uploadLoop.activate();
     }
@@ -226,7 +235,9 @@ class SSHChannelController {
       throw ArgumentError.value(bytesToAdd, 'bytesToAdd', 'must be positive');
     }
 
-    _remoteWindow += bytesToAdd;
+    // RFC 4254 Section 5.2
+    // Prevent overflow
+    _remoteWindow = (_remoteWindow + bytesToAdd).clamp(0, 0xFFFFFFFF);
 
     if (_remoteWindow > 0) {
       _uploadLoop.activate();
@@ -272,15 +283,23 @@ class SSHChannelController {
   void _handleEOFMessage() {
     printDebug?.call('SSHChannel._handleEOFMessage');
     _remoteStream.close();
+    // RFC 4254 Section 5.3
+    _sendEOFIfNeeded();
   }
 
   void _handleCloseMessage() {
     printDebug?.call('SSHChannel._handleCloseMessage');
     _remoteStream.close();
-    close();
+    // RFC 4254 Section 5.3
+    _sendCloseIfNeeded();
+    _done.complete();
   }
 
   bool _defaultRequestHandler(SSH_Message_Channel_Request request) {
+    // RFC 4254 Section 5.2
+    if (request.wantReply) {
+      _sendRequestFailure();
+    }
     return false;
   }
 

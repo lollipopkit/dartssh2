@@ -1,34 +1,36 @@
+// ignore_for_file: constant_identifier_names
+
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/ssh_algorithm.dart';
 import 'package:pointycastle/export.dart';
 
 class SSHMacType with SSHAlgorithm {
-  static const hmacMd5 = SSHMacType._(
+  static const hmac_md5 = SSHMacType._(
     name: 'hmac-md5',
     keySize: 16,
     macFactory: _hmacMd5Factory,
   );
 
-  static const hmacSha1 = SSHMacType._(
+  static const hmac_sha1 = SSHMacType._(
     name: 'hmac-sha1',
     keySize: 20,
     macFactory: _hmacSha1Factory,
   );
 
-  static const hmacSha196 = SSHMacType._(
+  static const hmac_sha1_96 = SSHMacType._(
     name: 'hmac-sha1-96', 
     keySize: 20,
     macFactory: _hmacSha196Factory,
   );
 
-  static const hmacSha256 = SSHMacType._(
+  static const hmac_sha2_256 = SSHMacType._(
     name: 'hmac-sha2-256',
     keySize: 32,
     macFactory: _hmacSha256Factory,
   );
 
-  static const hmacSha512 = SSHMacType._(
+  static const hmac_sha2_512 = SSHMacType._(
     name: 'hmac-sha2-512',
     keySize: 64,
     macFactory: _hmacSha512Factory,
