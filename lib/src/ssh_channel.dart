@@ -193,19 +193,18 @@ class SSHChannelController {
   /// Closes our side of the channel. Returns a [Future] that completes when
   /// the remote side has closed the channel.
   Future<void> close() async {
-    // if (_done.isCompleted) return;
+    if (_done.isCompleted) return;
 
-    // _localStreamConsumer.cancel();
-    // _sendEOFIfNeeded();
+    _localStreamConsumer.cancel();
+    _sendEOFIfNeeded();
 
-    // if (_remoteStream.isClosed) {
-    //   _sendCloseIfNeeded();
-    //   _done.complete();
-    //   return;
-    // }
+    if (_remoteStream.isClosed) {
+      _sendCloseIfNeeded();
+      _done.complete();
+      return;
+    }
 
-    // return _done.future;
-    destroy();
+    return _done.future;
   }
 
   /// Closes the channel immediately in both directions. This may send a close
@@ -276,7 +275,7 @@ class SSHChannelController {
   }
 
   void _handleCloseMessage() {
-    printDebug?.call('SSHChannel._handleCloseMessage');
+    printDebug?.call('SSHChannel._handleCLoseMessage');
     _remoteStream.close();
     close();
   }
@@ -490,7 +489,7 @@ class SSHChannelDataSplitter
 }
 
 class SSHChannelDataConsumer extends StreamConsumerBase<SSHChannelData> {
-  SSHChannelDataConsumer(Stream<SSHChannelData> stream) : super(stream);
+  SSHChannelDataConsumer(super.stream);
 
   @override
   int getLength(SSHChannelData chunk) {
