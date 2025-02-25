@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' show max;
+import 'dart:math' show Random, max;
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/hostkey/hostkey_ecdsa.dart';
@@ -8,6 +8,7 @@ import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
 import 'package:dartssh2/src/kex/kex_dh.dart';
 import 'package:dartssh2/src/kex/kex_nist.dart';
 import 'package:dartssh2/src/kex/kex_x25519.dart';
+import 'package:dartssh2/src/message/msg_ignore.dart';
 import 'package:dartssh2/src/message/msg_userauth.dart';
 import 'package:dartssh2/src/ssh_algorithm.dart';
 import 'package:dartssh2/src/ssh_kex.dart';
@@ -22,6 +23,7 @@ import 'package:dartssh2/src/message/msg_kex.dart';
 import 'package:dartssh2/src/message/msg_kex_dh.dart';
 import 'package:dartssh2/src/message/msg_kex_ecdh.dart';
 import 'package:dartssh2/src/ssh_message.dart';
+import 'package:dartssh2/src/utils/list.dart';
 import 'package:pointycastle/export.dart';
 
 import '../dartssh2.dart';
@@ -214,6 +216,11 @@ class SSHTransport {
     }
 
     _localPacketSN.increase();
+
+    // Send ignore message to prevent CBC padding oracle attack
+    if (_encryptCipher != null && (Random().nextInt(10) == 0)) {
+      _sendIgnoreMessageIfNeeded();
+    }
   }
 
   void close() {
@@ -675,6 +682,24 @@ class SSHTransport {
     printDebug?.call('SSHTransport._sendNewKeys');
     final message = SSH_Message_NewKeys();
     printTrace?.call('-> $socket: $message');
+    sendPacket(message.encode());
+  }
+
+  /// RFC 4251 Section 9.3.1
+  void _sendIgnoreMessageIfNeeded() {
+    if (isClosed) return;
+    if (_encryptCipher == null) return;
+
+    // Check if the cipher is a CBC mode cipher
+    final cipherName = _clientCipherType?.name ?? _serverCipherType?.name;
+    if (cipherName == null || !cipherName.endsWith('-cbc')) return;
+
+    // Generate random data
+    final length = 4 + (secureRandom.nextUint8()) % 12;
+    final data = randomBytes(length);
+
+    final message = SSH_Message_Ignore(data);
+    printTrace?.call('-> $socket: $message [CBC padding]');
     sendPacket(message.encode());
   }
 
