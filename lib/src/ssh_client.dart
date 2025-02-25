@@ -126,6 +126,21 @@ class SSHClient {
   /// method. Set this to null to disable automatic keep-alive messages.
   final Duration? keepAliveInterval;
 
+  /// Key pairs to use for hostbased authentication.
+  final List<SSHKeyPair>? hostbasedIdentities;
+
+  /// Hostname used for hostbased authentication.
+  final String? hostName;
+
+  /// Username of clinet host used for hostbased authentication.
+  final String? userNameOnClientHost;
+
+  /// Auth timeout, 10m by default.
+  final Duration authTimeout;
+
+  /// Max auth attempts, 20 by default.
+  final int maxAuthAttempts;
+
   /// Function called when additional host keys are received. This is an OpenSSH
   /// extension. May not be called if the server does not support the extension.
   // final SSHHostKeysHandler? onHostKeys;
@@ -146,12 +161,17 @@ class SSHClient {
     this.algorithms = const SSHAlgorithms(),
     this.onVerifyHostKey,
     this.identities,
+    this.hostbasedIdentities,
+    this.hostName,
+    this.userNameOnClientHost,
     this.onPasswordRequest,
     this.onChangePasswordRequest,
     this.onUserInfoRequest,
     this.onUserauthBanner,
     this.onAuthenticated,
     this.keepAliveInterval = const Duration(seconds: 10),
+    this.authTimeout = const Duration(minutes: 10),
+    this.maxAuthAttempts = 20
   }) {
     _transport = SSHTransport(
       socket,
@@ -176,7 +196,19 @@ class SSHClient {
     if (identities != null) {
       _keyPairsLeft.addAll(identities!);
     }
+
+    // 初始化 hostbased 密钥队列
+    if (hostbasedIdentities != null) {
+      _hostbasedKeyPairsLeft.addAll(hostbasedIdentities!);
+    }
+
+    // 添加认证超时定时器
+    _authTimeoutTimer = Timer(authTimeout, _onAuthTimeout);
   }
+
+  final _hostbasedKeyPairsLeft = Queue<SSHKeyPair>();
+  Timer? _authTimeoutTimer;
+  int _authAttempts = 0;
 
   late final SSHTransport _transport;
 
@@ -449,6 +481,7 @@ class SSHClient {
   /// Shutdown the entire SSH connection. Sessions and channels will also be
   /// closed immediately.
   void close() {
+    _authTimeoutTimer?.cancel();
     _closeChannels();
     _transport.close();
   }
@@ -563,6 +596,7 @@ class SSHClient {
   void _handleUserauthSuccess() {
     printTrace?.call('<- $socket: SSH_Message_Userauth_Success');
     printDebug?.call('SSHClient._handleUserauthSuccess');
+    _authTimeoutTimer?.cancel();
     _authenticated.complete();
     onAuthenticated?.call();
     _keepAlive?.start();
@@ -823,6 +857,13 @@ class SSHClient {
       _authMethodsLeft.add(SSHAuthMethod.keyboardInteractive);
     }
 
+    if (hostbasedIdentities != null &&
+        hostbasedIdentities!.isNotEmpty &&
+        hostName != null &&
+        userNameOnClientHost != null) {
+      _authMethodsLeft.add(SSHAuthMethod.hostbased);
+    }
+
     _authMethodsLeft.add(SSHAuthMethod.none);
 
     _tryNextAuthMethod();
@@ -830,6 +871,14 @@ class SSHClient {
 
   void _tryNextAuthMethod() {
     printDebug?.call('SSHClient._tryNextAuthenticationMethod');
+
+    if (_authAttempts >= maxAuthAttempts) {
+      _authenticated.completeError(
+        SSHAuthAbortError('Reached max attempts($maxAuthAttempts)'),
+      );
+      close();
+      return;
+    }
 
     if (_currentAuthMethod == SSHAuthMethod.publicKey) {
       if (_keyPairsLeft.isNotEmpty) {
@@ -856,16 +905,20 @@ class SSHClient {
         return _authWithNextPublicKey();
       case SSHAuthMethod.keyboardInteractive:
         return _authWithKeyboardInteractive();
+      case SSHAuthMethod.hostbased:
+        return _authWithNextHostbased();
     }
   }
 
   void _authWithNone() {
     printDebug?.call('SSHClient._authWithNone');
+    _authAttempts++;
     _sendMessage(SSH_Message_Userauth_Request.none(user: username));
   }
 
   Future<void> _authWithPassword() async {
     printDebug?.call('SSHClient._authWithPassword');
+    _authAttempts++;
 
     final password = await onPasswordRequest!();
     if (password == null) {
@@ -880,6 +933,7 @@ class SSHClient {
 
   void _authWithNextPublicKey() {
     printDebug?.call('SSHClient._authWithPublicKey');
+    _authAttempts++;
 
     final keyPair = _keyPairsLeft.removeFirst();
 
@@ -903,10 +957,40 @@ class SSHClient {
 
   void _authWithKeyboardInteractive() {
     printDebug?.call('SSHClient._authWithKeyboardInteractive');
+    _authAttempts++;
     _sendMessage(
       SSH_Message_Userauth_Request.keyboardInteractive(user: username),
     );
   }
+
+  void _authWithNextHostbased() {
+  printDebug?.call('SSHClient._authWithHostbased');
+  _authAttempts++;
+
+  final keyPair = _hostbasedKeyPairsLeft.removeFirst();
+  
+  final challenge = _transport.composeHostbasedChallenge(
+    username: username,
+    service: 'ssh-connection',
+    publicKeyAlgorithm: keyPair.type,
+    publicKey: keyPair.toPublicKey().encode(),
+    hostName: hostName!,
+    userNameOnClientHost: userNameOnClientHost!,
+  );
+  
+  final signature = keyPair.sign(challenge);
+  
+  _sendMessage(
+    SSH_Message_Userauth_Request.hostbased(
+      username: username,
+      publicKeyAlgorithm: keyPair.type,
+      publicKey: keyPair.toPublicKey().encode(),
+      hostName: hostName!,
+      userNameOnClientHost: userNameOnClientHost!,
+      signature: signature.encode(),
+    ),
+  );
+}
 
   Future<SSHChannelController> _openSessionChannel() async {
     final localChannelId = _channelIdAllocator.allocate();
@@ -1002,6 +1086,15 @@ class SSHClient {
     }
     final replyCompleter = _channelOpenReplyWaiters.remove(id)!;
     replyCompleter.complete(message);
+  }
+
+  void _onAuthTimeout() {
+    if (!_authenticated.isCompleted) {
+      _authenticated.completeError(
+        SSHAuthAbortError('Auth time: $authTimeout'),
+      );
+      close();
+    }
   }
 }
 

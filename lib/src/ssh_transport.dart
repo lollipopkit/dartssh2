@@ -521,6 +521,28 @@ class SSHTransport {
     return writer.takeBytes();
   }
 
+  /// Composes the data blob to be signed by the client with its public key.
+  Uint8List composeHostbasedChallenge({
+    required String username,
+    required String service,
+    required String publicKeyAlgorithm,
+    required Uint8List publicKey,
+    required String hostName,
+    required String userNameOnClientHost,
+  }) {
+    final writer = SSHMessageWriter();
+    writer.writeString(_sessionId!);
+    writer.writeUint8(SSH_Message_Userauth_Request.messageId);
+    writer.writeUtf8(username);
+    writer.writeUtf8(service);
+    writer.writeUtf8('hostbased');
+    writer.writeUtf8(publicKeyAlgorithm);
+    writer.writeString(publicKey);
+    writer.writeUtf8(hostName);
+    writer.writeUtf8(userNameOnClientHost);
+    return writer.takeBytes();
+  }
+
   bool _verifyHostkey({
     required Uint8List keyBytes,
     required Uint8List signatureBytes,
