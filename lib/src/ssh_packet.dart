@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 
-/// Contains rfc4253 packet format related constants and helper functions.
+/// SSH packet sequence number wraps around to zero after every 2^32
+/// packets. According to RFC4253, this counter should never be reset,
+/// even during key re-exchanges.
 abstract class SSHPacket {
   /// The maximum size of a packet including the header and MAC.
   static const maxLength = 35000;

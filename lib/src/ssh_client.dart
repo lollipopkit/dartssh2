@@ -593,9 +593,12 @@ class SSHClient {
 
     switch (message.serviceName) {
       case 'ssh-userauth':
+        // Service has been accepted, start authentication.
         return _startAuthentication();
       default:
-        printDebug?.call('unknown serviceName: ${message.serviceName}');
+        printDebug?.call('Unknown serviceName: ${message.serviceName}');
+        _transport.closeWithError(SSHStateError(
+            'Server accepted unknown service: ${message.serviceName}'));
     }
   }
 
@@ -1125,8 +1128,17 @@ class SSHClient {
 
   void _onAuthTimeout() {
     if (!_authenticated.isCompleted) {
+      final triedMethods = [
+        if (_currentAuthMethod != null) _currentAuthMethod!.name,
+        ...SSHAuthMethod.values
+            .where((m) => m != SSHAuthMethod.none && m != _currentAuthMethod)
+            .map((m) => m.name)
+      ].join(', ');
+
       _authenticated.completeError(
-        SSHAuthAbortError('Auth time: $authTimeout'),
+        SSHAuthAbortError(
+            'Authentication timed out after ${authTimeout.inSeconds} seconds. ' +
+                'Tried methods: $triedMethods'),
       );
       close();
     }

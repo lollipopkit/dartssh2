@@ -18,7 +18,6 @@ import 'package:dartssh2/src/ssh_kex_utils.dart';
 import 'package:dartssh2/src/ssh_packet.dart';
 import 'package:dartssh2/src/utils/int.dart';
 import 'package:dartssh2/src/hostkey/hostkey_ed25519.dart';
-import 'package:dartssh2/src/utils/list.dart';
 import 'package:dartssh2/src/message/msg_kex.dart';
 import 'package:dartssh2/src/message/msg_kex_dh.dart';
 import 'package:dartssh2/src/message/msg_kex_ecdh.dart';
@@ -177,6 +176,9 @@ class SSHTransport {
 
   Timer? _reKeyTimer;
   final Duration _reKeyInterval;
+  var _bytesSent = 0;
+  var _bytesReceived = 0;
+  static const _dataLimitForRekey = 1024 * 1024 * 1024;
 
   void sendPacket(Uint8List data) {
     if (isClosed) {
@@ -187,6 +189,15 @@ class SSHTransport {
         : max(SSHPacket.minAlign, _encryptCipher!.blockSize);
 
     final packet = SSHPacket.pack(data, align: packetAlign);
+
+    _bytesSent += packet.length;
+
+    // Check if we need to rekey
+    if (_bytesSent >= _dataLimitForRekey) {
+      _reKeyTimer?.cancel();
+      _sendKexInit();
+      _bytesSent = 0;
+    }
 
     if (_encryptCipher == null) {
       socket.sink.add(packet);
@@ -273,13 +284,13 @@ class SSHTransport {
 
     final bufferString = latin1.decode(_buffer.data);
 
-    // SSH version exchange is terminated by \r\n.
+    // Find the standard \r\n suffix
     var index = bufferString.indexOf('\r\n');
     if (index == -1) {
       // In the (rare) case SSH-2 version string is terminated by \n only (observed on Synology DS120j 2021)
       index = bufferString.indexOf('\n');
       if (index == -1) {
-        throw SSHHandshakeError('Version exchange not terminated');
+        return;
       }
       _buffer.consume(index + 1);
     } else {
@@ -394,8 +405,8 @@ class SSHTransport {
   }
 
   void _verifyPacketLength(int packetLength) {
-    if (packetLength > SSHPacket.maxLength) {
-      throw SSHPacketError('Packet too long: $packetLength');
+    if (packetLength < 1 || packetLength > SSHPacket.maxLength) {
+      throw SSHPacketError('Packet too long or invalid length: $packetLength');
     }
   }
 
@@ -423,18 +434,28 @@ class SSHTransport {
   void _verifyPacketMac(Uint8List payload, Uint8List actualMac) {
     final macSize = _remoteMac!.macSize;
     if (actualMac.length != macSize) {
-      throw ArgumentError.value(actualMac, 'mac', 'Invalid MAC size');
+      throw SSHPacketError(
+          'Invalid MAC size: ${actualMac.length}, expected: $macSize');
     }
 
     _remoteMac!.updateAll(_remotePacketSN.value.toUint32());
     _remoteMac!.updateAll(payload);
     final expectedMac = _remoteMac!.finish();
 
-    if (!expectedMac.equals(actualMac)) {
-      throw SSHPacketError(
-        'MAC mismatch, expected: $expectedMac, actual: $actualMac',
-      );
+    // Use constant time comparison to prevent timing attacks
+    if (!constantTimeEquals(expectedMac, actualMac)) {
+      throw SSHPacketError('MAC mismatch');
     }
+  }
+
+  /// Compares two byte arrays in constant time.
+  bool constantTimeEquals(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    var result = 0;
+    for (var i = 0; i < a.length; i++) {
+      result |= a[i] ^ b[i];
+    }
+    return result == 0;
   }
 
   void _startHandshake() {
@@ -658,6 +679,15 @@ class SSHTransport {
   }
 
   void _handleMessage(Uint8List message) {
+    _bytesReceived += message.length;
+
+    // Check if we need to rekey
+    if (_bytesReceived >= _dataLimitForRekey) {
+      _reKeyTimer?.cancel();
+      _sendKexInit();
+      _bytesReceived = 0;
+    }
+
     final messageId = SSHMessage.readMessageId(message);
     switch (messageId) {
       case SSH_Message_KexInit.messageId:
