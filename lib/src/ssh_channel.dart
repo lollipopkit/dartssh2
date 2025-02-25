@@ -17,6 +17,9 @@ typedef SSHChannelRequestHandler = bool Function(
 );
 
 class SSHChannelController {
+  static const _initialWindowSize = 2 * 1024 * 1024;
+  static const _windowAdjustThreshold = _initialWindowSize / 2;
+
   final int localId;
   final int localMaximumPacketSize;
   final int localInitialWindowSize;
@@ -316,6 +319,9 @@ class SSHChannelController {
     if (_done.isCompleted) return;
     if (_remoteStream.isPaused) return;
     if (_localWindow <= 0) return;
+
+    // Only send a window adjust message if the window is below the threshold.
+    if (_localWindow > _windowAdjustThreshold) return;
 
     final bytesToAdd = localInitialWindowSize - _localWindow;
     _localWindow = localInitialWindowSize;

@@ -94,7 +94,8 @@ class SSHTransport {
     this.onVerifyHostKey,
     this.onReady,
     this.onPacket,
-  }) {
+    Duration reKeyInterval = const Duration(hours: 1),
+  }) : _reKeyInterval = reKeyInterval {
     _initSocket();
     _startHandshake();
   }
@@ -174,6 +175,9 @@ class SSHTransport {
 
   final _remotePacketSN = SSHPacketSN.fromZero();
 
+  Timer? _reKeyTimer;
+  final Duration _reKeyInterval;
+
   void sendPacket(Uint8List data) {
     if (isClosed) {
       throw SSHStateError('Transport is closed');
@@ -206,6 +210,8 @@ class SSHTransport {
     if (isClosed) return;
     _socketSubscription?.cancel();
     _socketSubscription = null;
+    _reKeyTimer?.cancel();
+    _reKeyTimer = null;
     _doneCompleter.complete();
     socket.destroy();
   }
@@ -308,9 +314,10 @@ class SSHTransport {
         break;
       }
 
-      // if (payload.length > SSHPacket.maxPayloadLength) {
-      //   throw SSHPacketError('Packet too long: ${payload.length}');
-      // }
+      /// For safety & performance reasons, we limit the maximum packet size.
+      if (payload.length > SSHPacket.maxPayloadLength) {
+        throw SSHPacketError('Packet too long: ${payload.length}');
+      }
 
       _handleMessage(payload);
 
@@ -880,5 +887,13 @@ class SSHTransport {
     printDebug?.call('SSHTransport._handleMessageNewKeys');
     printTrace?.call('<- $socket: SSH_Message_NewKeys');
     _applyRemoteKeys();
+
+    // Reset the rekey timer.
+    _reKeyTimer?.cancel();
+    _reKeyTimer = Timer(_reKeyInterval, () {
+      if (!isClosed) {
+        _sendKexInit();
+      }
+    });
   }
 }

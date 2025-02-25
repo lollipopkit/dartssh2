@@ -99,27 +99,44 @@ class SftpFileWriter with DoneFuture {
   /// progress callback. Finally, it checks if all data has been acknowledged
   /// and completes the operation if done.
   Future<void> _handleLocalData(Uint8List chunk) async {
-    if (_bytesOnTheWire >= maxBytesOnTheWire) {
-      _subscription.pause();
-    } else {
-      _subscription.resume();
-    }
+    try {
+      if (_bytesOnTheWire >= maxBytesOnTheWire) {
+        _subscription.pause();
+      }
 
-    final chunkWriteOffset = offset + _bytesSent;
-    _bytesSent += chunk.length;
-    await file.writeBytes(chunk, offset: chunkWriteOffset);
+      final chunkWriteOffset = offset + _bytesSent;
+      _bytesSent += chunk.length;
 
-    _bytesAcked += chunk.length;
-    onProgress?.call(_bytesAcked);
+      int retries = 0;
+      const maxRetries = 3;
+      while (retries < maxRetries) {
+        try {
+          await file.writeBytes(chunk, offset: chunkWriteOffset);
+          break;
+        } catch (e) {
+          retries++;
+          if (retries >= maxRetries) rethrow;
+          await Future.delayed(Duration(milliseconds: 100 * retries));
+        }
+      }
 
-    if (_bytesOnTheWire < maxBytesOnTheWire) {
-      _subscription.resume();
-    }
+      _bytesAcked += chunk.length;
+      onProgress?.call(_bytesAcked);
 
-    if (_streamDone &&
-        _bytesSent == _bytesAcked &&
-        !_doneCompleter.isCompleted) {
-      _doneCompleter.complete();
+      if (_bytesOnTheWire < maxBytesOnTheWire) {
+        _subscription.resume();
+      }
+
+      if (_streamDone &&
+          _bytesSent == _bytesAcked &&
+          !_doneCompleter.isCompleted) {
+        _doneCompleter.complete();
+      }
+    } catch (e, st) {
+      if (!_doneCompleter.isCompleted) {
+        _doneCompleter.completeError(e, st);
+      }
+      await _subscription.cancel();
     }
   }
 

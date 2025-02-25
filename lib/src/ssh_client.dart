@@ -153,26 +153,24 @@ class SSHClient {
   /// true if the connection is closed normally or due to an error.
   bool get isClosed => _transport.isClosed;
 
-  SSHClient(
-    this.socket, {
-    required this.username,
-    this.printDebug,
-    this.printTrace,
-    this.algorithms = const SSHAlgorithms(),
-    this.onVerifyHostKey,
-    this.identities,
-    this.hostbasedIdentities,
-    this.hostName,
-    this.userNameOnClientHost,
-    this.onPasswordRequest,
-    this.onChangePasswordRequest,
-    this.onUserInfoRequest,
-    this.onUserauthBanner,
-    this.onAuthenticated,
-    this.keepAliveInterval = const Duration(seconds: 10),
-    this.authTimeout = const Duration(minutes: 10),
-    this.maxAuthAttempts = 20
-  }) {
+  SSHClient(this.socket,
+      {required this.username,
+      this.printDebug,
+      this.printTrace,
+      this.algorithms = const SSHAlgorithms(),
+      this.onVerifyHostKey,
+      this.identities,
+      this.hostbasedIdentities,
+      this.hostName,
+      this.userNameOnClientHost,
+      this.onPasswordRequest,
+      this.onChangePasswordRequest,
+      this.onUserInfoRequest,
+      this.onUserauthBanner,
+      this.onAuthenticated,
+      this.keepAliveInterval = const Duration(seconds: 10),
+      this.authTimeout = const Duration(minutes: 10),
+      this.maxAuthAttempts = 20}) {
     _transport = SSHTransport(
       socket,
       isServer: false,
@@ -504,8 +502,16 @@ class SSHClient {
   void _handleTransportClosed() {
     printDebug?.call('SSHClient._onTransportClosed');
     if (!_authenticated.isCompleted) {
+      final currentMethod = _currentAuthMethod != null
+          ? "Current method: ${_currentAuthMethod!.name}"
+          : "No auth method tried";
+      final attempts = _authAttempts > 0
+          ? "After $_authAttempts attempts"
+          : "No attempts made";
+
       _authenticated.completeError(
-        SSHAuthAbortError('Connection closed before authentication'),
+        SSHAuthAbortError(
+            'Connection closed before authentication. $currentMethod. $attempts'),
       );
     }
     _keepAlive?.stop();
@@ -887,8 +893,16 @@ class SSHClient {
     }
 
     if (_authMethodsLeft.isEmpty) {
+      final triedMethods = [
+        if (_currentAuthMethod != null) _currentAuthMethod!.name,
+        ...SSHAuthMethod.values
+            .where((m) => m != SSHAuthMethod.none && m != _currentAuthMethod)
+            .map((m) => m.name)
+      ].join(', ');
+
       return _authenticated.completeError(
-        SSHAuthFailError('All authentication methods failed'),
+        SSHAuthFailError(
+            'All authentication methods failed. Tried: $triedMethods'),
         StackTrace.current,
       );
     }
@@ -964,33 +978,54 @@ class SSHClient {
   }
 
   void _authWithNextHostbased() {
-  printDebug?.call('SSHClient._authWithHostbased');
-  _authAttempts++;
+    printDebug?.call('SSHClient._authWithHostbased');
+    _authAttempts++;
 
-  final keyPair = _hostbasedKeyPairsLeft.removeFirst();
-  
-  final challenge = _transport.composeHostbasedChallenge(
-    username: username,
-    service: 'ssh-connection',
-    publicKeyAlgorithm: keyPair.type,
-    publicKey: keyPair.toPublicKey().encode(),
-    hostName: hostName!,
-    userNameOnClientHost: userNameOnClientHost!,
-  );
-  
-  final signature = keyPair.sign(challenge);
-  
-  _sendMessage(
-    SSH_Message_Userauth_Request.hostbased(
-      username: username,
-      publicKeyAlgorithm: keyPair.type,
-      publicKey: keyPair.toPublicKey().encode(),
-      hostName: hostName!,
-      userNameOnClientHost: userNameOnClientHost!,
-      signature: signature.encode(),
-    ),
-  );
-}
+    if (_hostbasedKeyPairsLeft.isEmpty) {
+      _tryNextAuthMethod();
+      return;
+    }
+
+    final keyPair = _hostbasedKeyPairsLeft.removeFirst();
+
+    if (hostName == null || userNameOnClientHost == null) {
+      printDebug
+          ?.call('SSHClient._authWithHostbased: missing hostname or username');
+      _tryNextAuthMethod();
+      return;
+    }
+
+    try {
+      final challenge = _transport.composeHostbasedChallenge(
+        username: username,
+        service: 'ssh-connection',
+        publicKeyAlgorithm: keyPair.type,
+        publicKey: keyPair.toPublicKey().encode(),
+        hostName: hostName!,
+        userNameOnClientHost: userNameOnClientHost!,
+      );
+
+      final signature = keyPair.sign(challenge);
+
+      _sendMessage(
+        SSH_Message_Userauth_Request.hostbased(
+          username: username,
+          publicKeyAlgorithm: keyPair.type,
+          publicKey: keyPair.toPublicKey().encode(),
+          hostName: hostName!,
+          userNameOnClientHost: userNameOnClientHost!,
+          signature: signature.encode(),
+        ),
+      );
+    } catch (e) {
+      printDebug?.call('SSHClient._authWithHostbased: error: $e');
+      if (_hostbasedKeyPairsLeft.isEmpty) {
+        _tryNextAuthMethod();
+      } else {
+        _authWithNextHostbased();
+      }
+    }
+  }
 
   Future<SSHChannelController> _openSessionChannel() async {
     final localChannelId = _channelIdAllocator.allocate();
