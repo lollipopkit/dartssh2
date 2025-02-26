@@ -636,8 +636,16 @@ class SSHClient {
     final message = SSH_Message_Userauth_Passwd_ChangeReq.decode(payload);
     printTrace?.call('<- $socket: $message');
 
+    if (onChangePasswordRequest == null) {
+      printDebug?.call('No password change handler, trying next method');
+      return _tryNextAuthMethod();
+    }
+
     final response = await onChangePasswordRequest!(message.prompt);
-    if (response == null) return _tryNextAuthMethod();
+    if (response == null) {
+      printDebug?.call('Password change canceled, trying next method');
+      return _tryNextAuthMethod();
+    }
 
     _sendMessage(SSH_Message_Userauth_Request.newPassword(
       user: username,
@@ -1010,6 +1018,8 @@ class SSHClient {
 
       final signature = keyPair.sign(challenge);
 
+      printDebug?.call('Attempting hostbased auth with ${keyPair.type}');
+
       _sendMessage(
         SSH_Message_Userauth_Request.hostbased(
           username: username,
@@ -1020,8 +1030,8 @@ class SSHClient {
           signature: signature.encode(),
         ),
       );
-    } catch (e) {
-      printDebug?.call('SSHClient._authWithHostbased: error: $e');
+    } catch (e, stack) {
+      printDebug?.call('SSHClient._authWithHostbased: error: $e\n$stack');
       if (_hostbasedKeyPairsLeft.isEmpty) {
         _tryNextAuthMethod();
       } else {
@@ -1128,18 +1138,26 @@ class SSHClient {
 
   void _onAuthTimeout() {
     if (!_authenticated.isCompleted) {
-      final triedMethods = [
-        if (_currentAuthMethod != null) _currentAuthMethod!.name,
-        ...SSHAuthMethod.values
-            .where((m) => m != SSHAuthMethod.none && m != _currentAuthMethod)
-            .map((m) => m.name)
-      ].join(', ');
+      final attemptedMethods = <String>[];
 
-      _authenticated.completeError(
-        SSHAuthAbortError(
-            'Authentication timed out after ${authTimeout.inSeconds} seconds. ' +
-                'Tried methods: $triedMethods'),
-      );
+      if (_currentAuthMethod != null) {
+        attemptedMethods.add(_currentAuthMethod!.name);
+      }
+
+      var timeoutMessage =
+          'Authentication timed out after ${authTimeout.inSeconds} seconds.';
+
+      if (_authAttempts > 0) {
+        timeoutMessage += ' Made $_authAttempts authentication attempts.';
+
+        if (attemptedMethods.isNotEmpty) {
+          timeoutMessage += ' Methods tried: ${attemptedMethods.join(', ')}';
+        }
+      } else {
+        timeoutMessage += ' No authentication attempts were made.';
+      }
+
+      _authenticated.completeError(SSHAuthAbortError(timeoutMessage));
       close();
     }
   }

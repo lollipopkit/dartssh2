@@ -544,6 +544,10 @@ class SSHTransport {
     required String publicKeyAlgorithm,
     required Uint8List publicKey,
   }) {
+    if (_sessionId == null) {
+      throw StateError('Session ID not available, key exchange not completed');
+    }
+
     final writer = SSHMessageWriter();
     writer.writeString(_sessionId!);
     writer.writeUint8(SSH_Message_Userauth_Request.messageId);
@@ -565,6 +569,10 @@ class SSHTransport {
     required String hostName,
     required String userNameOnClientHost,
   }) {
+    if (_sessionId == null) {
+      throw StateError('Session ID not available, key exchange not completed');
+    }
+
     final writer = SSHMessageWriter();
     writer.writeString(_sessionId!);
     writer.writeUint8(SSH_Message_Userauth_Request.messageId);
@@ -892,7 +900,10 @@ class SSHTransport {
       signatureBytes: hostSignature,
       exchangeHash: exchangeHash,
     );
-    if (!verified) throw SSHHostkeyError('Signature verification failed');
+
+    if (!verified) {
+      throw SSHHostkeyError('Signature verification failed');
+    }
 
     _exchangeHash = exchangeHash;
     _sessionId ??= exchangeHash;
@@ -906,6 +917,11 @@ class SSHTransport {
       return;
     }
 
+    final fingerprintHex =
+        fingerprint.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':');
+    printDebug?.call(
+        'Server host key fingerprint: $fingerprintHex (${_hostkeyType?.name})');
+
     final userVerified = onVerifyHostKey != null
         ? onVerifyHostKey!(_hostkeyType!.name, fingerprint)
         : true;
@@ -913,7 +929,8 @@ class SSHTransport {
     Future.value(userVerified).then(
       (verified) {
         if (!verified) {
-          closeWithError(SSHHostkeyError('Hostkey verification failed'));
+          closeWithError(
+              SSHHostkeyError('Hostkey verification failed by user'));
         } else {
           _hostkeyVerified = true;
           _sendNewKeys();
@@ -921,8 +938,10 @@ class SSHTransport {
           onReady?.call();
         }
       },
-      onError: (error) {
-        closeWithError(error);
+      onError: (error, stack) {
+        printDebug?.call('Error in host key verification: $error\n$stack');
+        closeWithError(
+            error is SSHError ? error : SSHInternalError(error), stack);
       },
     );
   }

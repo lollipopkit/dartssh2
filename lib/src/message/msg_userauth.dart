@@ -155,11 +155,11 @@ class SSH_Message_Userauth_Request extends SSHMessage {
         final hasNewPassword = reader.readBool();
         final password = reader.readUtf8();
         if (hasNewPassword) {
-          final oldPassword = reader.readUtf8();
+          final newPassword = reader.readUtf8();
           return SSH_Message_Userauth_Request.newPassword(
             user: user,
-            oldPassword: oldPassword,
-            newPassword: password,
+            oldPassword: password,
+            newPassword: newPassword,
             serviceName: serviceName,
           );
         } else {
@@ -170,9 +170,13 @@ class SSH_Message_Userauth_Request extends SSHMessage {
           );
         }
       case 'publickey':
+        final hasSignature = reader.readBool();
         final publicKeyAlgorithm = reader.readUtf8();
         final publicKey = reader.readString();
-        final signature = reader.readString();
+        Uint8List? signature;
+        if (hasSignature) {
+          signature = reader.readString();
+        }
         return SSH_Message_Userauth_Request.publicKey(
           username: user,
           serviceName: serviceName,
