@@ -74,6 +74,8 @@ class SSHTransport {
   /// Function called when a packet is received.
   final SSHPacketHandler? onPacket;
 
+  final bool disableHostkeyVerification;
+
   /// A [Future] that completes when the transport is closed, or when an error
   /// occurs. After this [Future] completes, [isClosed] will be true and no
   /// more data can be sent or received.
@@ -97,6 +99,7 @@ class SSHTransport {
     this.onReady,
     this.onPacket,
     Duration reKeyInterval = const Duration(hours: 1),
+    this.disableHostkeyVerification = false,
   }) : _reKeyInterval = reKeyInterval {
     _initSocket();
     _startHandshake();
@@ -1353,14 +1356,17 @@ class SSHTransport {
       sharedSecret: sharedSecret,
     );
 
-    final verified = _verifyHostkey(
-      keyBytes: hostkey,
-      signatureBytes: hostSignature,
-      exchangeHash: exchangeHash,
-    );
+    if (!disableHostkeyVerification)
+    {
+      final verified = _verifyHostkey(
+        keyBytes: hostkey,
+        signatureBytes: hostSignature,
+        exchangeHash: exchangeHash,
+      );
 
-    if (!verified) {
-      throw SSHHostkeyError('Signature verification failed');
+      if (!verified) {
+        throw SSHHostkeyError('Signature verification failed');
+      }
     }
 
     _exchangeHash = exchangeHash;

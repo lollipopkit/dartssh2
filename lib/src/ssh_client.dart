@@ -163,6 +163,9 @@ class SSHClient {
   /// extension. May not be called if the server does not support the extension.
   final SSHHostKeysHandler? onHostKeys;
 
+  /// Allow to disable hostkey verification, which can be slow in debug mode.
+  final bool disableHostkeyVerification;
+
   /// A [Future] that completes when the transport is closed, or when an error
   /// occurs. After this [Future] completes, [isClosed] will be true and no more
   /// data can be sent or received.
@@ -196,7 +199,8 @@ class SSHClient {
 
       /// Maximum authentication attempts. RFC 4252 recommends 20 attempts.
       this.maxAuthAttempts = defaultMaxAuthAttempts,
-      this.onHostKeys}) {
+      this.onHostKeys,
+      this.disableHostkeyVerification = false}) {
     _transport = SSHTransport(
       socket,
       isServer: false,
@@ -206,6 +210,7 @@ class SSHClient {
       onVerifyHostKey: onVerifyHostKey,
       onReady: _handleTransportReady,
       onPacket: _handlePacket,
+      disableHostkeyVerification: disableHostkeyVerification,
     );
 
     _transport.done.then(
