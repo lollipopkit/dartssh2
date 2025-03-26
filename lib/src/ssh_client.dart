@@ -551,7 +551,12 @@ class SSHClient {
       );
     }
     _keepAlive?.stop();
-    _closeChannels();
+
+    try {
+      _closeChannels();
+    } catch (e) {
+      printDebug?.call("SSHClient::_handleTransportClosed - error: $e");
+    }
   }
 
   void _onHandshakeTimeout() {

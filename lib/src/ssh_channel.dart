@@ -306,7 +306,12 @@ class SSHChannelController {
     if (_done.isCompleted) return;
     if (_hasSentClose) return;
     _hasSentClose = true;
-    sendMessage(SSH_Message_Channel_Close(recipientChannel: remoteId));
+
+    try {
+      sendMessage(SSH_Message_Channel_Close(recipientChannel: remoteId));
+    } catch (e) {
+      printDebug?.call('SSHChannelController._sendCloseIfNeeded - error: $e');
+    }
   }
 
   void _sendRequestSuccess() {
@@ -496,8 +501,7 @@ class SSHChannelExtendedDataType {
   static const stderr = 1;
 }
 
-class SSHChannelDataSplitter
-    extends StreamTransformerBase<SSHChannelData, SSHChannelData> {
+class SSHChannelDataSplitter extends StreamTransformerBase<SSHChannelData, SSHChannelData> {
   SSHChannelDataSplitter(this.maxSize);
 
   final int maxSize;
