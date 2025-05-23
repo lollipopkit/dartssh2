@@ -22,15 +22,15 @@ void main() {
     test(
         'Static constants have correct digestFactory and isGroupExchange values',
         () {
-      expect(SSHKexType.x25519.digestFactory, equals(digestSha256));
-      expect(SSHKexType.nistp256.digestFactory, equals(digestSha256));
-      expect(SSHKexType.nistp384.digestFactory, equals(digestSha384));
-      expect(SSHKexType.nistp521.digestFactory, equals(digestSha512));
-      expect(SSHKexType.dhGexSha256.digestFactory, equals(digestSha256));
-      expect(SSHKexType.dhGexSha1.digestFactory, equals(digestSha1));
-      expect(SSHKexType.dh14Sha1.digestFactory, equals(digestSha1));
-      expect(SSHKexType.dh14Sha256.digestFactory, equals(digestSha256));
-      expect(SSHKexType.dh1Sha1.digestFactory, equals(digestSha1));
+      expect(SSHKexType.x25519.digestFactory, equals(SHA256Digest.new));
+      expect(SSHKexType.nistp256.digestFactory, equals(SHA256Digest.new));
+      expect(SSHKexType.nistp384.digestFactory, equals(SHA384Digest.new));
+      expect(SSHKexType.nistp521.digestFactory, equals(SHA512Digest.new));
+      expect(SSHKexType.dhGexSha256.digestFactory, equals(SHA256Digest.new));
+      expect(SSHKexType.dhGexSha1.digestFactory, equals(SHA1Digest.new));
+      expect(SSHKexType.dh14Sha1.digestFactory, equals(SHA1Digest.new));
+      expect(SSHKexType.dh14Sha256.digestFactory, equals(SHA256Digest.new));
+      expect(SSHKexType.dh1Sha1.digestFactory, equals(SHA1Digest.new));
 
       expect(SSHKexType.dhGexSha256.isGroupExchange, isTrue);
       expect(SSHKexType.dhGexSha1.isGroupExchange, isTrue);
