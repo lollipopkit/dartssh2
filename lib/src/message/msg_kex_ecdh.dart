@@ -1,9 +1,6 @@
 // ignore_for_file: camel_case_types
 
-import 'dart:typed_data';
-
-import 'package:convert/convert.dart';
-import 'package:dartssh2/src/ssh_message.dart';
+part of 'base.dart';
 
 class SSH_Message_KexECDH_Init implements SSHMessage {
   static const messageId = 30;

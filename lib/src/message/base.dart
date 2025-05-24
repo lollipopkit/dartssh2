@@ -1,11 +1,29 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:convert/convert.dart';
+import 'package:dartssh2/dartssh2.dart';
+import 'package:dartssh2/src/hostkey/hostkey_ecdsa.dart';
+import 'package:dartssh2/src/hostkey/hostkey_ed25519.dart';
+import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
+import 'package:dartssh2/src/ssh_hostkey.dart';
 import 'package:dartssh2/src/utils/int.dart';
 import 'package:dartssh2/src/utils/bigint.dart';
+import 'package:dartssh2/src/utils/list.dart';
 import 'package:dartssh2/src/utils/utf8.dart';
 
-abstract class SSHMessage {
+part 'msg_channel.dart';
+part 'msg_debug.dart';
+part 'msg_disconnect.dart';
+part 'msg_ignore.dart';
+part 'msg_kex_dh.dart';
+part 'msg_kex_ecdh.dart';
+part 'msg_kex.dart';
+part 'msg_request.dart';
+part 'msg_service.dart';
+part 'msg_userauth.dart';
+
+sealed class SSHMessage {
   /// Encode the message to SSH encoded data.
   Uint8List encode();
 

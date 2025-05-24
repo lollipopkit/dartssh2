@@ -15,7 +15,7 @@ import 'package:dartssh2/src/sftp/sftp_stream_io.dart';
 import 'package:dartssh2/src/ssh_channel.dart';
 import 'package:dartssh2/src/ssh_transport.dart';
 import 'package:dartssh2/src/utils/chunk_buffer.dart';
-import 'package:dartssh2/src/ssh_message.dart';
+import 'package:dartssh2/src/message/base.dart';
 
 const _kVersion = 3;
 

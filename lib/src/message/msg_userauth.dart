@@ -1,9 +1,6 @@
 // ignore_for_file: camel_case_types
 
-import 'dart:typed_data';
-
-import 'package:dartssh2/src/ssh_message.dart';
-import 'package:dartssh2/src/ssh_userauth.dart';
+part of 'base.dart';
 
 class SSH_Message_Userauth_Request extends SSHMessage {
   static const messageId = 50;

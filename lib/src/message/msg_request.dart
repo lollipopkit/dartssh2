@@ -1,14 +1,6 @@
 // ignore_for_file: camel_case_types
 
-import 'dart:typed_data';
-
-import 'package:convert/convert.dart';
-import 'package:dartssh2/dartssh2.dart';
-import 'package:dartssh2/src/hostkey/hostkey_ecdsa.dart';
-import 'package:dartssh2/src/hostkey/hostkey_ed25519.dart';
-import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
-import 'package:dartssh2/src/ssh_hostkey.dart';
-import 'package:dartssh2/src/ssh_message.dart';
+part of 'base.dart';
 
 class SSH_Message_Global_Request extends SSHMessage {
   static const messageId = 80;

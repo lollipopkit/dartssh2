@@ -1,8 +1,6 @@
 // ignore_for_file: camel_case_types
 
-import 'dart:typed_data';
-
-import 'package:dartssh2/src/ssh_message.dart';
+part of 'base.dart';
 
 /// Message to request opening a channel to remote host.
 class SSH_Message_Channel_Open implements SSHMessage {
