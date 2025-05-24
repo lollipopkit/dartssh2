@@ -319,23 +319,46 @@ class SSHChannelController {
 
     if (_done.isCompleted) return;
     if (_remoteStream.isPaused) return;
-    if (_localWindow <= 0) return;
 
     // Only send a window adjust message if the window is below the threshold.
+    // Assumes _windowAdjustThreshold is non-negative.
+    // If _localWindow is negative (an invalid state), it will likely be <= _windowAdjustThreshold.
     if (_localWindow > _windowAdjustThreshold) return;
 
-    var bytesToAdd = localInitialWindowSize - _localWindow;
-    if (bytesToAdd + _localWindow > 0xFFFFFFFF) { // 2³²-1 Overflow
-      bytesToAdd = 0xFFFFFFFF - _localWindow;
-    }
-    _localWindow = localInitialWindowSize;
+    const maxRfcWindowSize = 0xFFFFFFFF; // 2^32 - 1
 
-    sendMessage(
-      SSH_Message_Channel_Window_Adjust(
-        recipientChannel: remoteId,
-        bytesToAdd: bytesToAdd,
-      ),
-    );
+    // Determine the target window size, respecting RFC limits.
+    // localInitialWindowSize is typically a positive value (e.g., 2MB).
+    final int targetWindow =
+        (localInitialWindowSize > maxRfcWindowSize || localInitialWindowSize < 0)
+            ? maxRfcWindowSize
+            : localInitialWindowSize;
+
+    // If the current local window is already at or above the target,
+    // no further increase is needed.
+    if (_localWindow >= targetWindow) {
+      // As a defensive measure, if _localWindow somehow exceeded the absolute max,
+      // cap it. This is more about correcting an invalid state than calculating
+      // bytesToAdd for this specific adjustment.
+      if (_localWindow > maxRfcWindowSize) {
+        _localWindow = maxRfcWindowSize;
+      }
+      return;
+    }
+
+    // At this point, _localWindow < targetWindow.
+    // Calculate the number of bytes to add to reach the targetWindow.
+    // This will be a positive value. If _localWindow was negative (erroneous state),
+    // bytesToAdd will be appropriately larger to compensate.
+    final int bytesToAdd = targetWindow - _localWindow;
+
+    // Update our local window state to reflect the window size we are now advertising.
+    _localWindow = targetWindow;
+
+    sendMessage(SSH_Message_Channel_Window_Adjust(
+      recipientChannel: remoteId,
+      bytesToAdd: bytesToAdd,
+    ));
   }
 
   late final _uploadLoop = OnceSimultaneously(() async {
