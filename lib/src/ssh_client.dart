@@ -2,26 +2,31 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 
-import 'package:dartssh2/src/http/http_client.dart';
-import 'package:dartssh2/src/sftp/sftp_client.dart';
-import 'package:dartssh2/src/ssh_algorithm.dart';
-import 'package:dartssh2/src/ssh_channel.dart';
-import 'package:dartssh2/src/ssh_channel_id.dart';
-import 'package:dartssh2/src/ssh_errors.dart';
-import 'package:dartssh2/src/ssh_forward.dart';
-import 'package:dartssh2/src/ssh_keepalive.dart';
-import 'package:dartssh2/src/ssh_key_pair.dart';
-import 'package:dartssh2/src/ssh_session.dart';
-import 'package:dartssh2/src/ssh_transport.dart';
-import 'package:dartssh2/src/utils/async_queue.dart';
 import 'package:dartssh2/src/message/msg_channel.dart';
 import 'package:dartssh2/src/message/msg_request.dart';
 import 'package:dartssh2/src/message/msg_service.dart';
 import 'package:dartssh2/src/message/msg_userauth.dart';
-import 'package:dartssh2/src/ssh_message.dart';
-import 'package:dartssh2/src/socket/ssh_socket.dart';
-import 'package:dartssh2/src/ssh_userauth.dart';
+import 'package:dartssh2/src/ssh_channel.dart';
+import 'package:dartssh2/src/utils/async_queue.dart';
 import 'package:meta/meta.dart';
+
+import 'package:dartssh2/src/sftp/sftp_client.dart';
+import 'package:dartssh2/src/ssh_channel_id.dart';
+import 'package:dartssh2/src/ssh_errors.dart';
+import 'package:dartssh2/src/ssh_forward.dart';
+import 'package:dartssh2/src/ssh_hostkey.dart'; // Added import
+import 'package:dartssh2/src/ssh_message.dart';
+import 'package:dartssh2/src/ssh_transport.dart';
+import 'package:dartssh2/src/ssh_userauth.dart';
+import 'package:dartssh2/src/socket/ssh_socket.dart';
+import 'package:dartssh2/src/ssh_keepalive.dart';
+import 'package:dartssh2/src/ssh_key_pair.dart';
+import 'package:dartssh2/src/ssh_algorithm.dart';
+import 'package:dartssh2/src/ssh_session.dart';
+import 'package:dartssh2/src/http/http_client.dart';
+
+/// Type definition for the host keys handler.
+typedef SSHHostKeysHandler = void Function(List<SSHHostKey> hostKeys);
 
 /// https://datatracker.ietf.org/doc/html/rfc4252#section-8
 typedef SSHPasswordRequestHandler = FutureOr<String?> Function();
@@ -143,7 +148,7 @@ class SSHClient {
 
   /// Function called when additional host keys are received. This is an OpenSSH
   /// extension. May not be called if the server does not support the extension.
-  // final SSHHostKeysHandler? onHostKeys;
+  final SSHHostKeysHandler? onHostKeys;
 
   /// A [Future] that completes when the transport is closed, or when an error
   /// occurs. After this [Future] completes, [isClosed] will be true and no more
@@ -170,7 +175,8 @@ class SSHClient {
       this.onAuthenticated,
       this.keepAliveInterval = const Duration(seconds: 10),
       this.authTimeout = const Duration(minutes: 10),
-      this.maxAuthAttempts = 20}) {
+      this.maxAuthAttempts = 20,
+      this.onHostKeys}) {
     _transport = SSHTransport(
       socket,
       isServer: false,
@@ -684,19 +690,41 @@ class SSHClient {
     final message = SSH_Message_Global_Request.decode(payload);
     printTrace?.call('<- $socket: $message');
 
-    // Currently we don't support any global requests on the client side.
-    if (message.wantReply) {
+    bool handled = false;
+    switch (message.requestName) {
+      case 'hostkeys-00@openssh.com':
+        // This request type typically has wantReply = false.
+        _handleGlobalRequestHostkey(message);
+        handled = true;
+        break;
+      default:
+        printDebug?.call(
+            'Received unhandled global request "${message.requestName}".');
+        break;
+    }
+
+    if (!handled && message.wantReply) {
       _sendMessage(SSH_Message_Request_Failure());
     }
   }
 
-  // void _handleGlobalRequestHostkey(SSH_Message_Global_Request request) {
-  //   printDebug?.call('SSHClient._handleGlobalRequestHostkey');
-  //   // sendMessage(SSH_Message_Request_Success.e
-  //   if (onHostKeys != null) {
-  //     // onHostKeys(request.hostKeyAlgorithms);
-  //   }
-  // }
+  void _handleGlobalRequestHostkey(SSH_Message_Global_Request request) {
+    printDebug?.call('SSHClient._handleGlobalRequestHostkey');
+    if (onHostKeys != null) {
+      // This assumes that SSH_Message_Global_Request.decode correctly populates
+      // request.hostKeys and that the hostKeys field (List<SSHHostKey>?)
+      // is available in the SSH_Message_Global_Request class from msg_request.dart.
+      if (request.hostKeys != null && request.hostKeys!.isNotEmpty) {
+        onHostKeys!(request.hostKeys!);
+      } else {
+        printDebug?.call('Received hostkeys-00@openssh.com request with no host keys or hostKeys field not populated.');
+      }
+    } else {
+      printDebug?.call('Received hostkeys-00@openssh.com but no onHostKeys handler is set.');
+    }
+    // hostkeys-00@openssh.com global request has wantReply=false,
+    // so no SSH_Message_Request_Success or Failure is sent.
+  }
 
   void _handleGlobalRequestSuccess(Uint8List payload) {
     final message = SSH_Message_Request_Success.decode(payload);
@@ -1118,9 +1146,10 @@ class SSHClient {
   }
 
   Future<SSHMessage> _waitChannelOpenReply(SSHChannelId id) async {
-    if (_channelOpenReplyWaiters.containsKey(id)) {
+    final waiter = _channelOpenReplyWaiters[id];
+    if (waiter != null) {
       printDebug?.call('_waitChannelOpenReply: already waiting for $id');
-      return _channelOpenReplyWaiters[id]!.future;
+      return waiter.future;
     }
     final replyCompleter = Completer<SSHMessage>();
     _channelOpenReplyWaiters[id] = replyCompleter;

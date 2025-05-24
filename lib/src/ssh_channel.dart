@@ -229,7 +229,8 @@ class SSHChannelController {
       throw ArgumentError.value(bytesToAdd, 'bytesToAdd', 'must be positive');
     }
 
-    _remoteWindow += bytesToAdd;
+    final next = _remoteWindow + bytesToAdd;
+    _remoteWindow = next & 0xFFFFFFFF; // 2³²-1 Overflow
 
     if (_remoteWindow > 0) {
       _uploadLoop.activate();
@@ -323,7 +324,10 @@ class SSHChannelController {
     // Only send a window adjust message if the window is below the threshold.
     if (_localWindow > _windowAdjustThreshold) return;
 
-    final bytesToAdd = localInitialWindowSize - _localWindow;
+    var bytesToAdd = localInitialWindowSize - _localWindow;
+    if (bytesToAdd + _localWindow > 0xFFFFFFFF) { // 2³²-1 Overflow
+      bytesToAdd = 0xFFFFFFFF - _localWindow;
+    }
     _localWindow = localInitialWindowSize;
 
     sendMessage(
@@ -436,7 +440,10 @@ class SSHChannel {
 
   /// Closes our side of the channel. Returns a [Future] that completes when
   /// both sides of the channel are closed.
-  Future<void> close() => _controller.close();
+  Future<void> close() {
+    _controller._sendEOFIfNeeded();
+    return _controller.close();
+  }
 
   /// Destroys the channel in both directions. After calling this method,
   /// no more data can be sent or received.

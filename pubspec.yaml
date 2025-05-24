@@ -10,13 +10,13 @@ dependencies:
   asn1lib: ^1.5.8
   convert: ^3.1.2
   meta: ^1.16.0
-  pointycastle: ^3.9.1
+  pointycastle: ^4.0.0
   pinenacl: ^0.6.0
 
 dev_dependencies:
   build_runner: ^2.4.12
   dart_code_metrics_presets: ^2.20.0
-  lints: ">=4.0.0 <6.0.0"
+  lints: ^6.0.0
   test: ^1.25.15
 
 false_secrets:

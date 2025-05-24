@@ -19,13 +19,13 @@ abstract class SSHPacket {
   static const headerLength = 5;
 
   /// Returns the length field of the packet. This is the number of bytes
-  /// following the length field except for the MAC. [packet] can be partitial.
+  /// following the length field except for the MAC. [packet] can be partial.
   static int readPacketLength(Uint8List packet) {
     return ByteData.sublistView(packet).getUint32(0);
   }
 
   /// Returns the length of padding at the end of the packet before the MAC.
-  /// [packet] can be partitial.
+  /// [packet] can be partial.
   static int readPaddingLength(Uint8List packet) {
     return ByteData.sublistView(packet).getUint8(4);
   }

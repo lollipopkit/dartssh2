@@ -3,6 +3,11 @@
 import 'dart:typed_data';
 
 import 'package:convert/convert.dart';
+import 'package:dartssh2/dartssh2.dart';
+import 'package:dartssh2/src/hostkey/hostkey_ecdsa.dart';
+import 'package:dartssh2/src/hostkey/hostkey_ed25519.dart';
+import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
+import 'package:dartssh2/src/ssh_hostkey.dart';
 import 'package:dartssh2/src/ssh_message.dart';
 
 class SSH_Message_Global_Request extends SSHMessage {
@@ -15,15 +20,15 @@ class SSH_Message_Global_Request extends SSHMessage {
   final String? bindAddress;
   final int? bindPort;
 
-  // // "hostkeys-00@openssh.com" request specific data.
-  // final List<SSHHostKey>? hostKeys;
+  /// "hostkeys-00@openssh.com" request specific data.
+  final List<SSHHostKey>? hostKeys;
 
   SSH_Message_Global_Request({
     required this.requestName,
     required this.wantReply,
     this.bindAddress,
     this.bindPort,
-    // this.hostKeys,
+    this.hostKeys,
   });
 
   /// Request connections to the other side be forwarded to the local side
@@ -52,16 +57,16 @@ class SSH_Message_Global_Request extends SSHMessage {
     );
   }
 
-  // /// Send additional host keys after authenticated.
-  // factory SSH_Message_Global_Request.hostKeys({
-  //   required List<SSHHostKey> hostKeys,
-  // }) {
-  //   return SSH_Message_Global_Request(
-  //     requestName: 'hostkeys-00@openssh.com',
-  //     wantReply: false,
-  //     hostKeys: hostKeys,
-  //   );
-  // }
+  /// Send additional host keys after authenticated.
+  factory SSH_Message_Global_Request.hostKeys({
+    required List<SSHHostKey> hostKeys,
+  }) {
+    return SSH_Message_Global_Request(
+      requestName: 'hostkeys-00@openssh.com',
+      wantReply: false,
+      hostKeys: hostKeys,
+    );
+  }
 
   factory SSH_Message_Global_Request.keepAlive() {
     return SSH_Message_Global_Request(
@@ -94,13 +99,13 @@ class SSH_Message_Global_Request extends SSHMessage {
           bindAddress: bindAddress,
           bindPort: bindPort,
         );
-      // case 'hostkeys-00@openssh.com':
-      //   final hostKeys = reader.readStringList();
-      //   return SSH_Message_Global_Request(
-      //     requestName: requestName,
-      //     wantReply: wantReply,
-      //     hostKeys: _parseHostKeys(hostKeys),
-      //   );
+      case 'hostkeys-00@openssh.com':
+        final hostKeyBlobs = reader.readStringList();
+        return SSH_Message_Global_Request(
+          requestName: requestName,
+          wantReply: wantReply,
+          hostKeys: _parseHostKeys(hostKeyBlobs),
+        );
       default:
         return SSH_Message_Global_Request(
           requestName: requestName,
@@ -124,36 +129,44 @@ class SSH_Message_Global_Request extends SSHMessage {
         writer.writeUtf8(bindAddress!);
         writer.writeUint32(bindPort!);
         break;
-      // case 'hostkeys-00@openssh.com':
-      //   for (var hostkey in _encodeHostKeys(hostKeys!)) {
-      //     writer.writeString(hostkey);
-      //   }
-      //   break;
+      case 'hostkeys-00@openssh.com':
+        for (var hostkeyBlob in _encodeHostKeys(hostKeys!)) {
+          writer.writeString(hostkeyBlob);
+        }
+        break;
     }
     return writer.takeBytes();
   }
 
-  // static List<SSHHostKey> _parseHostKeys(List<Uint8List> pairs) {
-  //   final result = <SSHHostKey>[];
-  //   for (final pair in pairs) {
-  //     final reader = SSHMessageReader(pair);
-  //     final type = reader.readUtf8();
-  //     final key = reader.readString();
-  //     result.add(SSHHostKey(type, key));
-  //   }
-  //   return result;
-  // }
+  static List<SSHHostKey> _parseHostKeys(List<Uint8List> blobs) {
+    final result = <SSHHostKey>[];
+    for (final blob in blobs) {
+      final type = SSHHostKey.getType(blob);
+      if (type == SSHHostkeyType.ed25519.name) {
+        result.add(SSHEd25519PublicKey.decode(blob));
+      } else if (type == SSHHostkeyType.rsaSha1.name ||
+          type == SSHHostkeyType.rsaSha256.name ||
+          type == SSHHostkeyType.rsaSha512.name) {
+        result.add(SSHRsaPublicKey.decode(blob));
+      } else if (type == SSHHostkeyType.ecdsa256.name ||
+          type == SSHHostkeyType.ecdsa384.name ||
+          type == SSHHostkeyType.ecdsa521.name) {
+        result.add(SSHEcdsaPublicKey.decode(blob));
+      } else {
+        // Optionally handle unsupported types, e.g., log a warning or throw an error
+        print('Unsupported host key type in _parseHostKeys: $type');
+      }
+    }
+    return result;
+  }
 
-  // static List<Uint8List> _encodeHostKeys(List<SSHHostKey> hostKeys) {
-  //   final result = <Uint8List>[];
-  //   for (final hostKey in hostKeys) {
-  //     final writer = SSHMessageWriter();
-  //     writer.writeUtf8(hostKey.type);
-  //     writer.writeString(hostKey.key);
-  //     result.add(writer.takeBytes());
-  //   }
-  //   return result;
-  // }
+  static List<Uint8List> _encodeHostKeys(List<SSHHostKey> hostKeys) {
+    final result = <Uint8List>[];
+    for (final hostKey in hostKeys) {
+      result.add(hostKey.encode());
+    }
+    return result;
+  }
 
   @override
   String toString() {
@@ -162,8 +175,8 @@ class SSH_Message_Global_Request extends SSHMessage {
         return 'SSH_Message_Global_Request(requestName: $requestName, wantReply: $wantReply, bindAddress: $bindAddress, bindPort: $bindPort)';
       case 'cancel-tcpip-forward':
         return 'SSH_Message_Global_Request(requestName: $requestName, wantReply: $wantReply, bindAddress: $bindAddress, bindPort: $bindPort)';
-      // case 'hostkeys-00@openssh.com':
-      //   return 'SSH_Message_Global_Request(requestName: $requestName, wantReply: $wantReply, hostKeys: $hostKeys)';
+      case 'hostkeys-00@openssh.com':
+        return 'SSH_Message_Global_Request(requestName: $requestName, wantReply: $wantReply, hostKeys: $hostKeys)';
       default:
         return 'SSH_Message_Global_Request(requestName: $requestName, wantReply: $wantReply)';
     }
