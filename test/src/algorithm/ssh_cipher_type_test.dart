@@ -72,10 +72,10 @@ void main() {
     expect(
         algorithms.cipher,
         equals([
-          SSHCipherType.aes128ctr,
-          SSHCipherType.aes128cbc,
           SSHCipherType.aes256ctr,
+          SSHCipherType.aes128ctr,
           SSHCipherType.aes256cbc,
+          SSHCipherType.aes128cbc,
         ]));
 
     expect(
