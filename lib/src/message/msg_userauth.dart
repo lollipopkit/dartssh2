@@ -1,9 +1,31 @@
-// ignore_for_file: camel_case_types
+// ignore_for_file: camel_case_types, constant_identifier_names
 
 part of 'base.dart';
 
+/// SSH Authentication Protocol message numbers as defined in RFC 4252
+abstract class SSHUserAuthMessageNumbers {
+  /// General authentication message codes (RFC 4252 Section 6)
+  static const int SSH_MSG_USERAUTH_REQUEST = 50;
+  static const int SSH_MSG_USERAUTH_FAILURE = 51;
+  static const int SSH_MSG_USERAUTH_SUCCESS = 52;
+  static const int SSH_MSG_USERAUTH_BANNER = 53;
+
+  /// Method-specific message numbers (RFC 4252 Section 6)
+  /// Range 60-79 reserved for method-specific messages
+  static const int SSH_MSG_USERAUTH_PK_OK = 60;
+  static const int SSH_MSG_USERAUTH_PASSWD_CHANGEREQ = 60;
+  static const int SSH_MSG_USERAUTH_INFO_REQUEST = 60;
+  static const int SSH_MSG_USERAUTH_INFO_RESPONSE = 61;
+
+  /// Validate message number is in correct range
+  static bool isValidAuthMessageId(int messageId) {
+    return (messageId >= 50 && messageId <= 53) || (messageId >= 60 && messageId <= 79);
+  }
+}
+
 class SSH_Message_Userauth_Request extends SSHMessage {
-  static const messageId = 50;
+  /// 50
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_REQUEST; 
 
   final String user;
   final String serviceName;
@@ -49,11 +71,24 @@ class SSH_Message_Userauth_Request extends SSHMessage {
     this.userNameOnClientHost,
   });
 
+  /// Creates a password authentication request.
+  ///
+  /// The [password] will be encoded as UTF-8 as required by RFC 4252.
+  /// The client should ensure the password is properly normalized before
+  /// calling this constructor.
   factory SSH_Message_Userauth_Request.password({
     required String user,
     required String password,
     String serviceName = 'ssh-connection',
   }) {
+    // RFC 4252: Password must be in UTF-8 encoding
+    // Validate that the password can be properly encoded as UTF-8
+    try {
+      utf8.encode(password);
+    } catch (e) {
+      throw ArgumentError('Password must be valid UTF-8: $e');
+    }
+
     return SSH_Message_Userauth_Request(
       serviceName: serviceName,
       user: user,
@@ -62,12 +97,24 @@ class SSH_Message_Userauth_Request extends SSHMessage {
     );
   }
 
+  /// Creates a password change request.
+  ///
+  /// Both [oldPassword] and [newPassword] will be encoded as UTF-8
+  /// as required by RFC 4252.
   factory SSH_Message_Userauth_Request.newPassword({
     required String user,
     required String oldPassword,
     required String newPassword,
     String serviceName = 'ssh-connection',
   }) {
+    // RFC 4252: Both passwords must be in UTF-8 encoding
+    try {
+      utf8.encode(oldPassword);
+      utf8.encode(newPassword);
+    } catch (e) {
+      throw ArgumentError('Passwords must be valid UTF-8: $e');
+    }
+
     return SSH_Message_Userauth_Request(
       serviceName: serviceName,
       user: user,
@@ -227,10 +274,12 @@ class SSH_Message_Userauth_Request extends SSHMessage {
       case 'password':
         if (oldPassword != null) {
           writer.writeBool(true);
+          // RFC 4252: Ensure UTF-8 encoding for password transmission
           writer.writeUtf8(oldPassword!);
           writer.writeUtf8(password!);
         } else {
           writer.writeBool(false);
+          // RFC 4252: Ensure UTF-8 encoding for password transmission
           writer.writeUtf8(password!);
         }
         break;
@@ -266,7 +315,8 @@ class SSH_Message_Userauth_Request extends SSHMessage {
 }
 
 class SSH_Message_Userauth_Failure extends SSHMessage {
-  static const messageId = 51;
+  /// 51
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_FAILURE;
 
   final List<String> methodsLeft;
   final bool partialSuccess;
@@ -303,7 +353,8 @@ class SSH_Message_Userauth_Failure extends SSHMessage {
 }
 
 class SSH_Message_Userauth_Success extends SSHMessage {
-  static const messageId = 52;
+  /// 52
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_SUCCESS;
 
   SSH_Message_Userauth_Success();
 
@@ -327,7 +378,8 @@ class SSH_Message_Userauth_Success extends SSHMessage {
 }
 
 class SSH_Message_Userauth_Banner extends SSHMessage {
-  static const messageId = 53;
+  /// 53
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_BANNER;
 
   final String message;
   final String language;
@@ -364,7 +416,8 @@ class SSH_Message_Userauth_Banner extends SSHMessage {
 }
 
 class SSH_Message_Userauth_Passwd_ChangeReq extends SSHMessage {
-  static const messageId = 60;
+  /// 60
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_PASSWD_CHANGEREQ;
 
   final String prompt;
 
@@ -396,7 +449,8 @@ class SSH_Message_Userauth_Passwd_ChangeReq extends SSHMessage {
 }
 
 class SSH_Message_Userauth_InfoRequest implements SSHMessage {
-  static const messageId = 60;
+  /// 60
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_INFO_REQUEST;
 
   final String name;
   final String instruction;
@@ -455,7 +509,8 @@ class SSH_Message_Userauth_InfoRequest implements SSHMessage {
 }
 
 class SSH_Message_Userauth_InfoResponse implements SSHMessage {
-  static const messageId = 61;
+  /// 61
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_INFO_RESPONSE;
 
   final List<String> responses;
 

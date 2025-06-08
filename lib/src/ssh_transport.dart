@@ -557,7 +557,18 @@ class SSHTransport {
     return writer.takeBytes();
   }
 
-  /// Composes the data blob to be signed by the client with its public key.
+  /// Composes challenge data for host-based authentication according to RFC 4252
+  /// 
+  /// The signature data MUST be constructed in the exact order specified by RFC 4252:
+  /// - session identifier
+  /// - SSH_MSG_USERAUTH_REQUEST byte
+  /// - user name
+  /// - service name  
+  /// - "hostbased" method name
+  /// - public key algorithm for host key
+  /// - public host key and certificates for client host
+  /// - client host name (FQDN in US-ASCII)
+  /// - user name on the client host (UTF-8 encoding)
   Uint8List composeHostbasedChallenge({
     required String username,
     required String service,
@@ -570,17 +581,62 @@ class SSHTransport {
       throw StateError('Session ID not available, key exchange not completed');
     }
 
+    // RFC 4252: Validate inputs
+    if (username.isEmpty) {
+      throw ArgumentError('Username cannot be empty');
+    }
+    if (service.isEmpty) {
+      throw ArgumentError('Service name cannot be empty');
+    }
+    if (publicKeyAlgorithm.isEmpty) {
+      throw ArgumentError('Public key algorithm cannot be empty');
+    }
+    if (publicKey.isEmpty) {
+      throw ArgumentError('Public key cannot be empty');
+    }
+    if (hostName.isEmpty) {
+      throw ArgumentError('Host name cannot be empty');
+    }
+    if (userNameOnClientHost.isEmpty) {
+      throw ArgumentError('User name on client host cannot be empty');
+    }
+
+    // Validate hostname is ASCII (RFC 4252 requirement)
+    if (!_isAscii(hostName)) {
+      throw ArgumentError('Host name must be in US-ASCII encoding');
+    }
+
+    // Validate username on client host can be encoded as UTF-8
+    try {
+      utf8.encode(userNameOnClientHost);
+    } catch (e) {
+      throw ArgumentError('User name on client host must be valid UTF-8: $e');
+    }
+
     final writer = SSHMessageWriter();
-    writer.writeString(_sessionId!);
-    writer.writeUint8(SSH_Message_Userauth_Request.messageId);
-    writer.writeUtf8(username);
-    writer.writeUtf8(service);
-    writer.writeUtf8('hostbased');
-    writer.writeUtf8(publicKeyAlgorithm);
-    writer.writeString(publicKey);
-    writer.writeUtf8(hostName);
-    writer.writeUtf8(userNameOnClientHost);
+    
+    // RFC 4252: Signature data construction in exact order
+    writer.writeString(_sessionId!);                    // session identifier
+    writer.writeUint8(SSH_Message_Userauth_Request.messageId); // SSH_MSG_USERAUTH_REQUEST
+    writer.writeUtf8(username);                         // user name
+    writer.writeUtf8(service);                          // service name
+    writer.writeUtf8('hostbased');                      // method name
+    writer.writeUtf8(publicKeyAlgorithm);               // public key algorithm for host key
+    writer.writeString(publicKey);                      // public host key and certificates
+    writer.writeUtf8(hostName);                         // client host name (FQDN in US-ASCII)
+    writer.writeUtf8(userNameOnClientHost);             // user name on client host (UTF-8)
+    
     return writer.takeBytes();
+  }
+
+  /// Check if string contains only ASCII characters
+  bool _isAscii(String str) {
+    for (int i = 0; i < str.length; i++) {
+      if (str.codeUnitAt(i) > 127) {
+        return false;
+      }
+    }
+    return true;
   }
 
   bool _verifyHostkey({
@@ -965,4 +1021,10 @@ class SSHTransport {
       }
     });
   }
+
+  /// Returns true if both encryption ciphers are initialized (confidentiality is provided).
+  bool get hasConfidentiality => _encryptCipher != null && _decryptCipher != null;
+
+  /// Returns true if both MACs are initialized (MAC protection is provided).
+  bool get hasMacProtection => _localMac != null && _remoteMac != null;
 }

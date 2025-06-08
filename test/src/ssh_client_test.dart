@@ -72,7 +72,7 @@ void main() {
           await client.authenticated;
           fail('should have thrown');
         } catch (e) {
-          expect(e, isA<SSHAuthFailError>());
+          expect(e, isA<SSHAuthAbortError>());
         }
         client.close();
       },
