@@ -45,11 +45,17 @@ Uint8List encodeBigInt(BigInt? number) {
     return Uint8List.fromList([0]);
   }
 
+  if (number == null) {
+    throw ArgumentError('BigInt cannot be null');
+  }
+
   int needsPaddingByte;
   int rawSize;
 
-  if (number! > BigInt.zero) {
+  if (number > BigInt.zero) {
     rawSize = (number.bitLength + 7) >> 3;
+    // RFC 4251: If the most significant bit would be set for a positive number,
+    // the number MUST be preceded by a zero byte
     needsPaddingByte =
         ((number >> (rawSize - 1) * 8) & _negativeFlag) == _negativeFlag
             ? 1
@@ -65,6 +71,10 @@ Uint8List encodeBigInt(BigInt? number) {
     result[size - i - 1] = (number! & _byteMask).toInt();
     number = number >> 8;
   }
+
+  // RFC 4251: Unnecessary leading bytes with the value 0 or 255 MUST NOT be included
+  // This is implicitly handled by the above logic
+
   return result;
 }
 

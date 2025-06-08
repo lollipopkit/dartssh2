@@ -24,11 +24,31 @@ part 'msg_service.dart';
 part 'msg_userauth.dart';
 
 sealed class SSHMessage {
-  /// Encode the message to SSH encoded data.
   Uint8List encode();
 
   static int readMessageId(Uint8List bytes) {
     return bytes[0];
+  }
+
+  // RFC 4251 Section 7: Message number validation
+  static bool isValidMessageId(int messageId) {
+    return messageId >= 1 && messageId <= 255;
+  }
+
+  static bool isTransportMessage(int messageId) {
+    return (messageId >= 1 && messageId <= 19) || // Generic
+        (messageId >= 20 && messageId <= 29) || // Algorithm negotiation
+        (messageId >= 30 && messageId <= 49); // Key exchange
+  }
+
+  static bool isUserAuthMessage(int messageId) {
+    return (messageId >= 50 && messageId <= 59) || // Generic
+        (messageId >= 60 && messageId <= 79); // Method specific
+  }
+
+  static bool isConnectionMessage(int messageId) {
+    return (messageId >= 80 && messageId <= 89) || // Generic
+        (messageId >= 90 && messageId <= 127); // Channel related
   }
 }
 
@@ -128,6 +148,7 @@ class SSHMessageWriter {
   int get length => _builder.length;
 
   void writeBool(bool value) {
+    // RFC 4251: applications MUST NOT store values other than 0 and 1
     _builder.addByte(value ? 1 : 0);
   }
 
@@ -165,7 +186,27 @@ class SSHMessageWriter {
 
   /// Write comma separated list of names as a string.
   void writeNameList(List<String> value) {
+    // RFC 4251: A name MUST have a non-zero length, and it MUST NOT contain a comma
+    for (final name in value) {
+      if (name.isEmpty) {
+        throw ArgumentError('Name in name-list cannot be empty');
+      }
+      if (name.contains(',')) {
+        throw ArgumentError('Name in name-list cannot contain comma: $name');
+      }
+      // Names must be US-ASCII
+      if (!_isUsAscii(name)) {
+        throw ArgumentError('Name in name-list must be US-ASCII: $name');
+      }
+    }
     writeString(Utf8Encoder().convert(value.join(',')));
+  }
+
+  bool _isUsAscii(String str) {
+    for (int i = 0; i < str.length; i++) {
+      if (str.codeUnitAt(i) > 127) return false;
+    }
+    return true;
   }
 
   /// Write multiple precision integer as a string.

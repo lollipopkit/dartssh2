@@ -181,9 +181,15 @@ class SSHTransport {
     if (isClosed) {
       throw SSHStateError('Transport is closed');
     }
-    final packetAlign = _encryptCipher == null
-        ? SSHPacket.minAlign
-        : max(SSHPacket.minAlign, _encryptCipher!.blockSize);
+
+    // RFC 4251: Check for sequence number wrap and force rekey
+    if (_localPacketSN.needsRekey && _encryptCipher != null) {
+      printDebug?.call('Sequence number approaching wrap, forcing rekey');
+      _sendKexInit();
+    }
+
+    final packetAlign =
+        _encryptCipher == null ? SSHPacket.minAlign : max(SSHPacket.minAlign, _encryptCipher!.blockSize);
 
     final packet = SSHPacket.pack(data, align: packetAlign);
 
@@ -342,9 +348,7 @@ class SSHTransport {
   /// WITHOUT `packet length`, `padding length`, `padding` and `MAC`. Returns
   /// `null` if there is not enough data in the buffer to read the packet.
   Uint8List? _consumePacket() {
-    return _decryptCipher == null
-        ? _consumeClearTextPacket()
-        : _consumeEncryptedPacket();
+    return _decryptCipher == null ? _consumeClearTextPacket() : _consumeEncryptedPacket();
   }
 
   Uint8List? _consumeClearTextPacket() {
@@ -415,9 +419,8 @@ class SSHTransport {
   /// Verifies that the padding of the packet is correct. Throws [SSHPacketError]
   /// if the padding is incorrect.
   void _verifyPacketPadding(int payloadLength, int paddingLength) {
-    final expectedPacketAlign = _decryptCipher == null
-        ? SSHPacket.minAlign
-        : max(SSHPacket.minAlign, _decryptCipher!.blockSize);
+    final expectedPacketAlign =
+        _decryptCipher == null ? SSHPacket.minAlign : max(SSHPacket.minAlign, _decryptCipher!.blockSize);
 
     final minPaddingLength = SSHPacket.paddingLength(
       payloadLength,
@@ -436,8 +439,7 @@ class SSHTransport {
   void _verifyPacketMac(Uint8List payload, Uint8List actualMac) {
     final macSize = _remoteMac!.macSize;
     if (actualMac.length != macSize) {
-      throw SSHPacketError(
-          'Invalid MAC size: ${actualMac.length}, expected: $macSize');
+      throw SSHPacketError('Invalid MAC size: ${actualMac.length}, expected: $macSize');
     }
 
     _remoteMac!.updateAll(_remotePacketSN.value.toUint32());
@@ -912,20 +914,19 @@ class SSHTransport {
       return;
     }
 
-    final fingerprintHex =
-        fingerprint.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':');
-    printDebug?.call(
-        'Server host key fingerprint: $fingerprintHex (${_hostkeyType?.name})');
+    final fingerprintHex = fingerprint.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':');
 
-    final userVerified = onVerifyHostKey != null
-        ? onVerifyHostKey!(_hostkeyType!.name, fingerprint)
-        : true;
+    // RFC 4251 Section 4.1: Implementations SHOULD try to make best effort to check host keys
+    printDebug?.call('Server host key fingerprint: $fingerprintHex (${_hostkeyType?.name})');
+    printDebug?.call('WARNING: This is the first time connecting to this host. '
+        'Verify the fingerprint through external means before accepting.');
+
+    final userVerified = onVerifyHostKey != null ? onVerifyHostKey!(_hostkeyType!.name, fingerprint) : true;
 
     Future.value(userVerified).then(
       (verified) {
         if (!verified) {
-          closeWithError(
-              SSHHostkeyError('Hostkey verification failed by user'));
+          closeWithError(SSHHostkeyError('Hostkey verification failed by user'));
         } else {
           _hostkeyVerified = true;
           _sendNewKeys();
@@ -935,8 +936,7 @@ class SSHTransport {
       },
       onError: (error, stack) {
         printDebug?.call('Error in host key verification: $error\n$stack');
-        closeWithError(
-            error is SSHError ? error : SSHInternalError(error), stack);
+        closeWithError(error is SSHError ? error : SSHInternalError(error), stack);
       },
     );
   }

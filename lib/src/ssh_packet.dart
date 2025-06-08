@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/ssh_errors.dart' show SSHStateError;
+
 /// SSH packet sequence number wraps around to zero after every 2^32
 /// packets. According to RFC4253, this counter should never be reset,
 /// even during key re-exchanges.
@@ -64,9 +66,13 @@ class SSHPacketSN {
 
   int get value => _value;
 
+  // RFC 4251 Section 9.3.3: peers MUST rekey before sequence number wrap
+  bool get needsRekey => _value > 0xF0000000; // Trigger rekey before wrap
+
   void increase() {
     if (_value == 0xffffffff) {
-      _value = 0;
+      // RFC 4251: This should never happen - must rekey before wrap
+      throw SSHStateError('Sequence number wrapped - connection must be rekeyed');
     } else {
       _value++;
     }

@@ -679,7 +679,8 @@ class SSHClient {
   void _handleUserauthBanner(Uint8List payload) {
     final message = SSH_Message_Userauth_Banner.decode(payload);
     printDebug?.call('<- $socket: $message');
-    onUserauthBanner?.call(message.message);
+    // RFC 4251: Filter control characters when displaying to user
+    onUserauthBanner?.call(_sanitizeMessage(message.message));
   }
 
   void _handleGlobalRequest(Uint8List payload) {
@@ -713,10 +714,12 @@ class SSHClient {
       if (request.hostKeys != null && request.hostKeys!.isNotEmpty) {
         onHostKeys!(request.hostKeys!);
       } else {
-        printDebug?.call('Received hostkeys-00@openssh.com request with no host keys or hostKeys field not populated.');
+        printDebug?.call(
+            'Received hostkeys-00@openssh.com request with no host keys or hostKeys field not populated.');
       }
     } else {
-      printDebug?.call('Received hostkeys-00@openssh.com but no onHostKeys handler is set.');
+      printDebug?.call(
+          'Received hostkeys-00@openssh.com but no onHostKeys handler is set.');
     }
     // hostkeys-00@openssh.com global request has wantReply=false,
     // so no SSH_Message_Request_Success or Failure is sent.
@@ -1185,6 +1188,24 @@ class SSHClient {
       _authenticated.completeError(SSHAuthAbortError(timeoutMessage));
       close();
     }
+  }
+
+  String _sanitizeMessage(String message) {
+    // RFC 4251 Section 9.2: replace control characters (except tab, CR, LF)
+    final buffer = StringBuffer();
+    for (int i = 0; i < message.length; i++) {
+      final code = message.codeUnitAt(i);
+      if (code == 9 || code == 10 || code == 13) {
+        // Allow tab, LF, CR
+        buffer.writeCharCode(code);
+      } else if (code < 32 || code == 127) {
+        // Replace other control characters
+        buffer.write('\\x${code.toRadixString(16).padLeft(2, '0')}');
+      } else {
+        buffer.writeCharCode(code);
+      }
+    }
+    return buffer.toString();
   }
 }
 

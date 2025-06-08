@@ -4,11 +4,56 @@ import 'package:dartssh2/src/algorithm/ssh_kex_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_mac_type.dart';
 
 mixin SSHAlgorithm {
-  /// The name of the algorithm.
   String get name;
+
+  // RFC 4251: algorithm identifiers MUST be printable US-ASCII,
+  // non-empty strings no longer than 64 characters
+  bool get isValidAlgorithmName {
+    if (name.isEmpty || name.length > 64) return false;
+
+    // Check for printable US-ASCII (32-126, excluding DEL 127)
+    for (int i = 0; i < name.length; i++) {
+      int code = name.codeUnitAt(i);
+      if (code <= 32 || code >= 127) return false;
+    }
+
+    // RFC 4251: Names MUST NOT contain comma, whitespace, control characters
+    if (name.contains(',') || name.contains(' ') || name.contains('\t')) {
+      return false;
+    }
+
+    // Check @ format rule
+    final atIndex = name.indexOf('@');
+    if (atIndex != -1) {
+      // Must have only a single @ sign
+      if (name.indexOf('@', atIndex + 1) != -1) return false;
+
+      // Part after @ must be valid domain name
+      final domain = name.substring(atIndex + 1);
+      if (!_isValidDomainName(domain)) return false;
+    }
+
+    return true;
+  }
+
+  bool _isValidDomainName(String domain) {
+    // Basic domain name validation
+    if (domain.isEmpty) return false;
+    final parts = domain.split('.');
+    if (parts.length < 2) return false;
+
+    for (final part in parts) {
+      if (part.isEmpty) return false;
+      if (!RegExp(r'^[a-zA-Z0-9-]+$').hasMatch(part)) return false;
+      if (part.startsWith('-') || part.endsWith('-')) return false;
+    }
+
+    return true;
+  }
 
   @override
   String toString() {
+    assert(isValidAlgorithmName, 'Invalid algorithm name: $name');
     return '$runtimeType($name)';
   }
 }
@@ -62,6 +107,7 @@ class SSHAlgorithms {
       SSHHostkeyType.ecdsa384,
       SSHHostkeyType.ecdsa256,
     ],
+
     /// Keep this sequence for safety.
     this.cipher = const [
       SSHCipherType.aes256ctr,
