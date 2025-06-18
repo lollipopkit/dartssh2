@@ -130,9 +130,13 @@ class SSHAlgorithms {
     ],
     // Prefer modern SHA-2 MACs by default; keep SHA-1 as fallback and MD5 last.
     this.mac = const [
-      SSHMacType.hmacSha512,
-      SSHMacType.hmacSha256,
+      SSHMacType.hmacSha256_96,
+      SSHMacType.hmacSha512_96,
+      SSHMacType.hmacSha256Etm,
+      SSHMacType.hmacSha512Etm,
       SSHMacType.hmacSha1,
+      SSHMacType.hmacSha256,
+      SSHMacType.hmacSha512,
       SSHMacType.hmacMd5,
     ],
   });
