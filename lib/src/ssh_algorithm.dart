@@ -3,8 +3,10 @@ import 'package:dartssh2/src/algorithm/ssh_hostkey_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_kex_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_mac_type.dart';
 
-mixin SSHAlgorithm {
+abstract class SSHAlgorithm {
   String get name;
+
+  const SSHAlgorithm();
 
   // RFC 4251: algorithm identifiers MUST be printable US-ASCII,
   // non-empty strings no longer than 64 characters
