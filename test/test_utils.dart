@@ -12,12 +12,15 @@ Future<bool> acceptTestHostKey(String type, Uint8List fingerprint) async {
 }
 
 /// A honeypot that accepts all passwords and public-keys
-Future<SSHClient> getHoneypotClient() async {
+Future<SSHClient> getHoneypotClient({
+  SSHAlgorithms algorithms = const SSHAlgorithms(),
+}) async {
   return SSHClient(
     await SSHSocket.connect(testSshHost, testSshPort),
     username: 'demo',
     onPasswordRequest: () => 'password',
     onVerifyHostKey: acceptTestHostKey,
+    algorithms: algorithms,
   );
 }
 
