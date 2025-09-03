@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dartssh2/src/ssh_algorithm.dart';
 import 'package:dartssh2/src/utils/cipher_ext.dart';
+import 'package:pointycastle/export.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -12,6 +13,8 @@ void main() {
   testCipher(SSHCipherType.aes128ctr);
   testCipher(SSHCipherType.aes192ctr);
   testCipher(SSHCipherType.aes256ctr);
+  testAEADCipher(SSHCipherType.aes128gcm);
+  testAEADCipher(SSHCipherType.aes256gcm);
   group('SSHAlgorithm', () {
     test('toString() returns correct format', () {
       final algorithm = SSHKexType.x25519;
@@ -51,6 +54,7 @@ void main() {
           SSHKexType.nistp384,
           SSHKexType.nistp256,
           SSHKexType.dhGexSha256,
+          SSHKexType.dh16Sha512,
           SSHKexType.dh14Sha256,
           SSHKexType.dh14Sha1,
           SSHKexType.dhGexSha1,
@@ -118,4 +122,30 @@ void testCipher(SSHCipherType type) {
   //     throwsA(isA<StateError>()),
   //   );
   // });
+}
+
+void testAEADCipher(SSHCipherType type) {
+  test('$type AEAD encrypt/decrypt', () {
+    expect(type.isAEAD, isTrue, reason: 'Expected AEAD cipher');
+    
+    final key = Uint8List(type.keySize);
+    final nonce = Uint8List(12); // GCM uses 12-byte nonce
+    final aad = Uint8List.fromList('additional data'.codeUnits);
+    final plainText = Uint8List.fromList('Hello, AES-GCM!'.codeUnits);
+    
+    // ENCRYPTION
+    final encrypter = type.createAEADCipher(key, nonce, forEncryption: true, aad: aad) as GCMBlockCipher;
+    encrypter.processAADBytes(aad, 0, aad.length);
+    
+    // Use the process method for simpler usage
+    final encryptedWithTag = encrypter.process(plainText);
+    expect(encryptedWithTag.length, equals(plainText.length + type.tagSize));
+    
+    // DECRYPTION
+    final decrypter = type.createAEADCipher(key, nonce, forEncryption: false, aad: aad) as GCMBlockCipher;
+    decrypter.processAADBytes(aad, 0, aad.length);
+    
+    final decrypted = decrypter.process(encryptedWithTag);
+    expect(decrypted, equals(plainText));
+  });
 }

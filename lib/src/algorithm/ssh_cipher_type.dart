@@ -11,6 +11,10 @@ class SSHCipherType with SSHAlgorithm {
     aes128ctr,
     aes192ctr,
     aes256ctr,
+    aes128gcm,
+    aes256gcm,
+    // TODO: Uncomment when ChaCha20-Poly1305 implementation is complete
+    // chacha20poly1305,
   ];
 
   static const aes128ctr = SSHCipherType._(
@@ -49,6 +53,30 @@ class SSHCipherType with SSHAlgorithm {
     cipherFactory: _aesCbcFactory,
   );
 
+  static const aes128gcm = SSHCipherType._(
+    name: 'aes128-gcm@openssh.com',
+    keySize: 16,
+    cipherFactory: _aesGcmFactory,
+    isAEAD: true,
+    tagSize: 16,
+  );
+
+  static const aes256gcm = SSHCipherType._(
+    name: 'aes256-gcm@openssh.com',
+    keySize: 32,
+    cipherFactory: _aesGcmFactory,
+    isAEAD: true,
+    tagSize: 16,
+  );
+
+  // static const chacha20poly1305 = SSHCipherType._(
+  //   name: 'chacha20-poly1305@openssh.com',
+  //   keySize: 64, // 32 bytes for ChaCha20 key + 32 bytes for Poly1305 key
+  //   cipherFactory: _chacha20Poly1305Factory,
+  //   isAEAD: true,
+  //   tagSize: 16,
+  // );
+
   static SSHCipherType? fromName(String name) {
     for (final value in values) {
       if (value.name == name) {
@@ -62,6 +90,8 @@ class SSHCipherType with SSHAlgorithm {
     required this.name,
     required this.keySize,
     required this.cipherFactory,
+    this.isAEAD = false,
+    this.tagSize = 0,
   });
 
   /// The name of the algorithm. For example, `"aes256-ctr`"`.
@@ -74,13 +104,24 @@ class SSHCipherType with SSHAlgorithm {
 
   final int blockSize = 16;
 
-  final BlockCipher Function() cipherFactory;
+  /// Whether this is an AEAD cipher mode
+  final bool isAEAD;
 
+  /// Authentication tag size for AEAD modes
+  final int tagSize;
+
+  final dynamic Function() cipherFactory;
+
+  /// Creates cipher for non-AEAD modes
   BlockCipher createCipher(
     Uint8List key,
     Uint8List iv, {
     required bool forEncryption,
   }) {
+    if (isAEAD) {
+      throw StateError('Use createAEADCipher for AEAD modes');
+    }
+    
     if (key.length != keySize) {
       throw ArgumentError.value(key, 'key', 'Key must be $keySize bytes long');
     }
@@ -89,8 +130,34 @@ class SSHCipherType with SSHAlgorithm {
       throw ArgumentError.value(iv, 'iv', 'IV must be $ivSize bytes long');
     }
 
-    final cipher = cipherFactory();
+    final cipher = cipherFactory() as BlockCipher;
     cipher.init(forEncryption, ParametersWithIV(KeyParameter(key), iv));
+    return cipher;
+  }
+
+  /// Creates cipher for AEAD modes
+  AEADBlockCipher createAEADCipher(
+    Uint8List key,
+    Uint8List nonce, {
+    required bool forEncryption,
+    Uint8List? aad,
+  }) {
+    if (!isAEAD) {
+      throw StateError('Use createCipher for non-AEAD modes');
+    }
+    
+    if (key.length != keySize) {
+      throw ArgumentError.value(key, 'key', 'Key must be $keySize bytes long');
+    }
+
+    final cipher = cipherFactory() as AEADBlockCipher;
+    final params = AEADParameters(
+      KeyParameter(key),
+      tagSize * 8, // tagSize in bits
+      nonce,
+      aad ?? Uint8List(0),
+    );
+    cipher.init(forEncryption, params);
     return cipher;
   }
 }
@@ -102,4 +169,9 @@ BlockCipher _aesCtrFactory() {
 
 BlockCipher _aesCbcFactory() {
   return CBCBlockCipher(AESEngine());
+}
+
+/// Creates AES-GCM cipher factory
+AEADBlockCipher _aesGcmFactory() {
+  return GCMBlockCipher(AESEngine());
 }

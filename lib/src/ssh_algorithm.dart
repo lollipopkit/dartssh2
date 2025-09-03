@@ -93,6 +93,7 @@ class SSHAlgorithms {
       SSHKexType.nistp384,
       SSHKexType.nistp256,
       SSHKexType.dhGexSha256,
+      SSHKexType.dh16Sha512,
       SSHKexType.dh14Sha256,
       SSHKexType.dh14Sha1,
       SSHKexType.dhGexSha1,

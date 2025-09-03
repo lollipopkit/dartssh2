@@ -44,6 +44,11 @@ class SSHKexType with SSHAlgorithm {
     digestFactory: SHA256Digest.new,
   );
 
+  static const dh16Sha512 = SSHKexType._(
+    name: 'diffie-hellman-group16-sha512',
+    digestFactory: SHA512Digest.new,
+  );
+
   static const dh1Sha1 = SSHKexType._(
     name: 'diffie-hellman-group1-sha1',
     digestFactory: SHA1Digest.new,

@@ -869,6 +869,9 @@ class SSHTransport {
       case SSHKexType.dh14Sha256:
         _kex = SSHKexDH.group14();
         break;
+      case SSHKexType.dh16Sha512:
+        _kex = SSHKexDH.group16();
+        break;
       case SSHKexType.dh1Sha1:
         _kex = SSHKexDH.group1();
         break;
