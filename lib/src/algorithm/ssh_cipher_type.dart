@@ -5,6 +5,7 @@ import 'package:pointycastle/export.dart';
 
 class SSHCipherType with SSHAlgorithm {
   static const values = [
+    tdescbc,
     aes128cbc,
     aes192cbc,
     aes256cbc,
@@ -16,6 +17,14 @@ class SSHCipherType with SSHAlgorithm {
     // TODO: Uncomment when ChaCha20-Poly1305 implementation is complete
     // chacha20poly1305,
   ];
+
+  static const tdescbc = SSHCipherType._(
+    name: '3des-cbc',
+    keySize: 24,
+    cipherFactory: _tdesCbcFactory,
+    blockSizeOverride: 8,
+    ivSizeOverride: 8,
+  );
 
   static const aes128ctr = SSHCipherType._(
     name: 'aes128-ctr',
@@ -92,6 +101,8 @@ class SSHCipherType with SSHAlgorithm {
     required this.cipherFactory,
     this.isAEAD = false,
     this.tagSize = 0,
+    this.blockSizeOverride,
+    this.ivSizeOverride,
   });
 
   /// The name of the algorithm. For example, `"aes256-ctr`"`.
@@ -100,9 +111,12 @@ class SSHCipherType with SSHAlgorithm {
 
   final int keySize;
 
-  final int ivSize = 16;
+  final int? blockSizeOverride;
+  final int? ivSizeOverride;
 
-  final int blockSize = 16;
+  int get ivSize => ivSizeOverride ?? 16;
+
+  int get blockSize => blockSizeOverride ?? 16;
 
   /// Whether this is an AEAD cipher mode
   final bool isAEAD;
@@ -169,6 +183,10 @@ BlockCipher _aesCtrFactory() {
 
 BlockCipher _aesCbcFactory() {
   return CBCBlockCipher(AESEngine());
+}
+
+BlockCipher _tdesCbcFactory() {
+  return CBCBlockCipher(DESedeEngine());
 }
 
 /// Creates AES-GCM cipher factory
