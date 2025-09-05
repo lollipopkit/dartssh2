@@ -151,6 +151,10 @@ class SSHClient {
   /// extension. May not be called if the server does not support the extension.
   final SSHHostKeysHandler? onHostKeys;
 
+  /// Enable SSH agent forwarding. When true, agent forwarding will be requested
+  /// for all sessions.
+  final bool enableAgentForwarding;
+
   /// A [Future] that completes when the transport is closed, or when an error
   /// occurs. After this [Future] completes, [isClosed] will be true and no more
   /// data can be sent or received.
@@ -181,7 +185,8 @@ class SSHClient {
 
       /// Maximum authentication attempts. RFC 4252 recommends 20 attempts.
       this.maxAuthAttempts = defaultMaxAuthAttempts,
-      this.onHostKeys}) {
+      this.onHostKeys,
+      this.enableAgentForwarding = false}) {
     _transport = SSHTransport(
       socket,
       isServer: false,
@@ -349,6 +354,13 @@ class SSHClient {
       }
     }
 
+    if (enableAgentForwarding) {
+      final agentOk = await channelController.sendAuthAgent();
+      if (!agentOk) {
+        printDebug?.call('Agent forwarding request failed or not supported by server');
+      }
+    }
+
     if (pty != null) {
       final ptyOk = await channelController.sendPtyReq(
         terminalType: pty.type,
@@ -388,6 +400,13 @@ class SSHClient {
       }
     }
 
+    if (enableAgentForwarding) {
+      final agentOk = await channelController.sendAuthAgent();
+      if (!agentOk) {
+        printDebug?.call('Agent forwarding request failed or not supported by server');
+      }
+    }
+
     if (pty != null) {
       final ok = await channelController.sendPtyReq(
         terminalType: pty.type,
@@ -414,6 +433,14 @@ class SSHClient {
     await _authenticated.future;
 
     final channelController = await _openSessionChannel();
+
+    if (enableAgentForwarding) {
+      final agentOk = await channelController.sendAuthAgent();
+      if (!agentOk) {
+        printDebug?.call('Agent forwarding request failed or not supported by server');
+      }
+    }
+
     channelController.sendSubsystem(subsystem);
   }
 
@@ -423,6 +450,14 @@ class SSHClient {
     await _authenticated.future;
 
     final channelController = await _openSessionChannel();
+
+    if (enableAgentForwarding) {
+      final agentOk = await channelController.sendAuthAgent();
+      if (!agentOk) {
+        printDebug?.call('Agent forwarding request failed or not supported by server');
+      }
+    }
+
     channelController.sendSubsystem('sftp');
 
     return SftpClient(

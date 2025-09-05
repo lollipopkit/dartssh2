@@ -164,6 +164,16 @@ class SSHChannelController {
     );
   }
 
+  Future<bool> sendAuthAgent() async {
+    sendMessage(
+      SSH_Message_Channel_Request.authAgent(
+        recipientChannel: remoteId,
+        wantReply: true,
+      ),
+    );
+    return await _requestReplyQueue.next;
+  }
+
   void sendTerminalWindowChange({
     required int width,
     required int height,
@@ -483,6 +493,10 @@ class SSHChannel {
 
   void sendSignal(String signal) {
     _controller.sendSignal(signal);
+  }
+
+  Future<bool> sendAuthAgent() async {
+    return await _controller.sendAuthAgent();
   }
 
   /// Closes our side of the channel. Returns a [Future] that completes when

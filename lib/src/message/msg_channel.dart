@@ -544,6 +544,7 @@ abstract class SSHChannelRequestType {
   static const signal = 'signal';
   static const exitStatus = 'exit-status';
   static const exitSignal = 'exit-signal';
+  static const authAgent = 'auth-agent-req@openssh.com';
 }
 
 /// Message to send channel-specific requests.
@@ -780,6 +781,18 @@ class SSH_Message_Channel_Request implements SSHMessage {
     );
   }
 
+  /// Request SSH agent forwarding for the session
+  factory SSH_Message_Channel_Request.authAgent({
+    required int recipientChannel,
+    bool wantReply = false,
+  }) {
+    return SSH_Message_Channel_Request(
+      recipientChannel: recipientChannel,
+      requestType: SSHChannelRequestType.authAgent,
+      wantReply: wantReply,
+    );
+  }
+
   factory SSH_Message_Channel_Request.decode(Uint8List bytes) {
     final reader = SSHMessageReader(bytes);
     reader.skip(1);
@@ -884,6 +897,11 @@ class SSH_Message_Channel_Request implements SSHMessage {
           errorMessage: errorMessage,
           languageTag: languageTag,
         );
+      case SSHChannelRequestType.authAgent:
+        return SSH_Message_Channel_Request.authAgent(
+          recipientChannel: recipientChannel,
+          wantReply: wantReply,
+        );
       default:
         return SSH_Message_Channel_Request(
           recipientChannel: recipientChannel,
@@ -945,6 +963,8 @@ class SSH_Message_Channel_Request implements SSHMessage {
         writer.writeUtf8(errorMessage!);
         writer.writeUtf8(languageTag!);
         break;
+      case 'auth-agent-req@openssh.com':
+        break;
     }
     return writer.takeBytes();
   }
@@ -972,6 +992,8 @@ class SSH_Message_Channel_Request implements SSHMessage {
         return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply, exitStatus: $exitStatus)';
       case 'exit-signal':
         return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply, exitSignalName: $exitSignalName, coreDumped: $coreDumped, errorMessage: $errorMessage, languageTag: $languageTag)';
+      case 'auth-agent-req@openssh.com':
+        return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply)';
       default:
         return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply)';
     }
