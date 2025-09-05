@@ -9,6 +9,7 @@ import 'package:dartssh2/src/kex/kex_dh.dart';
 import 'package:dartssh2/src/kex/kex_nist.dart';
 import 'package:dartssh2/src/kex/kex_x25519.dart';
 import 'package:dartssh2/src/ssh_algorithm.dart';
+import 'package:dartssh2/src/algorithm/ssh_compression_type.dart';
 import 'package:dartssh2/src/ssh_kex.dart';
 import 'package:dartssh2/src/utils/bigint.dart';
 import 'package:dartssh2/src/utils/cipher_ext.dart';
@@ -137,6 +138,10 @@ class SSHTransport {
 
   SSHMacType? _serverMacType;
 
+  SSHCompressionType? _clientCompressionType;
+
+  SSHCompressionType? _serverCompressionType;
+
   SSHKex? _kex;
 
   /// [_exchangeHash] of the first key exchange is used as session identifier.
@@ -188,10 +193,13 @@ class SSHTransport {
       _sendKexInit();
     }
 
+    // Apply compression if negotiated (we are always client, so use client compression for outgoing data)
+    final compressedData = _clientCompressionType?.compress(data) ?? data;
+
     final packetAlign =
         _encryptCipher == null ? SSHPacket.minAlign : max(SSHPacket.minAlign, _encryptCipher!.blockSize);
 
-    final packet = SSHPacket.pack(data, align: packetAlign);
+    final packet = SSHPacket.pack(compressedData, align: packetAlign);
 
     _bytesSent += packet.length;
 
@@ -370,7 +378,9 @@ class SSHTransport {
     final payloadLength = packetLength - paddingLength - 1;
     _verifyPacketPadding(payloadLength, paddingLength);
 
-    return Uint8List.sublistView(packet, 5, packet.length - paddingLength);
+    final payload = Uint8List.sublistView(packet, 5, packet.length - paddingLength);
+    // Apply decompression if negotiated (we are client, so decompress using server compression for incoming data)
+    return _serverCompressionType?.decompress(payload) ?? payload;
   }
 
   Uint8List? _consumeEncryptedPacket() {
@@ -407,7 +417,9 @@ class SSHTransport {
     final mac = _buffer.consume(macLength);
     _verifyPacketMac(packet, mac);
 
-    return Uint8List.sublistView(packet, 5, packet.length - paddingLength);
+    final payload = Uint8List.sublistView(packet, 5, packet.length - paddingLength);
+    // Apply decompression if negotiated (we are client, so decompress using server compression for incoming data)
+    return _serverCompressionType?.decompress(payload) ?? payload;
   }
 
   void _verifyPacketLength(int packetLength) {
@@ -679,8 +691,8 @@ class SSHTransport {
       encryptionServerToClient: algorithms.cipher.toNameList(),
       macClientToServer: algorithms.mac.toNameList(),
       macServerToClient: algorithms.mac.toNameList(),
-      compressionClientToServer: ['none'],
-      compressionServerToClient: ['none'],
+      compressionClientToServer: algorithms.compression.toNameList(),
+      compressionServerToClient: algorithms.compression.toNameList(),
       firstKexPacketFollows: false,
     );
 
@@ -825,6 +837,16 @@ class SSHTransport {
       remoteAlgorithms: message.macServerToClient,
       isServer: isServer,
     );
+    _clientCompressionType = SSHKexUtils.selectAlgorithm(
+      localAlgorithms: algorithms.compression,
+      remoteAlgorithms: message.compressionClientToServer,
+      isServer: isServer,
+    );
+    _serverCompressionType = SSHKexUtils.selectAlgorithm(
+      localAlgorithms: algorithms.compression,
+      remoteAlgorithms: message.compressionServerToClient,
+      isServer: isServer,
+    );
 
     if (_kexType == null) {
       throw StateError('No matching key exchange algorithm');
@@ -844,6 +866,12 @@ class SSHTransport {
     if (_serverMacType == null) {
       throw StateError('No matching server MAC algorithm');
     }
+    if (_clientCompressionType == null) {
+      throw StateError('No matching client compression algorithm');
+    }
+    if (_serverCompressionType == null) {
+      throw StateError('No matching server compression algorithm');
+    }
 
     printDebug?.call('SSHTransport._kexType: $_kexType');
     printDebug?.call('SSHTransport._hostkeyType: $_hostkeyType');
@@ -851,6 +879,8 @@ class SSHTransport {
     printDebug?.call('SSHTransport._serverCipherType: $_serverCipherType');
     printDebug?.call('SSHTransport._clientMacType: $_clientMacType');
     printDebug?.call('SSHTransport._serverMacType: $_serverMacType');
+    printDebug?.call('SSHTransport._clientCompressionType: $_clientCompressionType');
+    printDebug?.call('SSHTransport._serverCompressionType: $_serverCompressionType');
 
     switch (_kexType) {
       case SSHKexType.x25519:

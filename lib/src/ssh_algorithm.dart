@@ -1,4 +1,5 @@
 import 'package:dartssh2/src/algorithm/ssh_cipher_type.dart';
+import 'package:dartssh2/src/algorithm/ssh_compression_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_hostkey_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_kex_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_mac_type.dart';
@@ -86,6 +87,9 @@ class SSHAlgorithms {
   /// Algorithm used for the authentication.
   final List<SSHMacType> mac;
 
+  /// Algorithm used for compression.
+  final List<SSHCompressionType> compression;
+
   const SSHAlgorithms({
     this.kex = const [
       SSHKexType.x25519,
@@ -121,6 +125,10 @@ class SSHAlgorithms {
       SSHMacType.hmacSha256,
       SSHMacType.hmacSha512,
       SSHMacType.hmacMd5,
+    ],
+    this.compression = const [
+      SSHCompressionType.zlib,
+      SSHCompressionType.none,
     ],
   });
 }
