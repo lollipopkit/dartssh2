@@ -25,7 +25,7 @@ abstract class SSHUserAuthMessageNumbers {
 
 class SSH_Message_Userauth_Request extends SSHMessage {
   /// 50
-  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_REQUEST; 
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_REQUEST;
 
   final String user;
   final String serviceName;

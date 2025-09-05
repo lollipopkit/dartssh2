@@ -76,6 +76,9 @@ class SSHChannelController {
   /// true if we have sent an close message to the remote side.
   var _hasSentClose = false;
 
+  /// true if the stream is paused due to negative window size
+  var _isPausedDueToWindow = false;
+
   final _done = Completer<void>();
 
   Future<bool> sendExec(String command) async {
@@ -244,11 +247,20 @@ class SSHChannelController {
       return;
     }
 
+    // If window is negative, don't process more data until window is adjusted
+    if (_isPausedDueToWindow) {
+      printDebug?.call('SSHChannel._handleDataMessage: stream paused due to negative window, skipping data');
+      return;
+    }
+
     _remoteStream.add(SSHChannelData(data, type: type));
 
     _localWindow -= data.length;
     if (_localWindow < 0) {
-      // Maybe we should close the channel here?
+      // If window goes negative, pause the stream and immediately request window adjustment
+      printDebug?.call('SSHChannel._handleDataMessage: window went negative: $_localWindow');
+      _isPausedDueToWindow = true;
+      _sendWindowAdjustIfNeeded();
     }
 
     _sendWindowAdjustIfNeeded();
@@ -317,7 +329,6 @@ class SSHChannelController {
     printDebug?.call('SSHChannel._sendWindowAdjustIfNeeded');
 
     if (_done.isCompleted) return;
-    if (_remoteStream.isPaused) return;
 
     // Only send a window adjust message if the window is below the threshold.
     // Assumes _windowAdjustThreshold is non-negative.
@@ -328,10 +339,9 @@ class SSHChannelController {
 
     // Determine the target window size, respecting RFC limits.
     // localInitialWindowSize is typically a positive value (e.g., 2MB).
-    final int targetWindow =
-        (localInitialWindowSize > maxRfcWindowSize || localInitialWindowSize < 0)
-            ? maxRfcWindowSize
-            : localInitialWindowSize;
+    final int targetWindow = (localInitialWindowSize > maxRfcWindowSize || localInitialWindowSize < 0)
+        ? maxRfcWindowSize
+        : localInitialWindowSize;
 
     // If the current local window is already at or above the target,
     // no further increase is needed.
@@ -358,6 +368,11 @@ class SSHChannelController {
       recipientChannel: remoteId,
       bytesToAdd: bytesToAdd,
     ));
+
+    // If the stream was paused due to negative window, reset the flag
+    if (_isPausedDueToWindow) {
+      _isPausedDueToWindow = false;
+    }
   }
 
   late final _uploadLoop = OnceSimultaneously(() async {
@@ -490,8 +505,7 @@ class SSHChannelExtendedDataType {
   static const stderr = 1;
 }
 
-class SSHChannelDataSplitter
-    extends StreamTransformerBase<SSHChannelData, SSHChannelData> {
+class SSHChannelDataSplitter extends StreamTransformerBase<SSHChannelData, SSHChannelData> {
   SSHChannelDataSplitter(this.maxSize);
 
   final int maxSize;

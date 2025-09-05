@@ -646,7 +646,7 @@ class SSHClient {
 
   Future<void> _handleUserauthPasswordChangeRequest(Uint8List payload) async {
     printDebug?.call('SSHClient._handleUserauthPasswordChangeRequest');
-    
+
     // RFC 4252: Password change should be disabled if no confidentiality or MAC
     if (!_hasConfidentiality || !_hasMacProtection) {
       printDebug?.call('Refusing password change - insufficient transport security');
@@ -698,11 +698,12 @@ class SSHClient {
   void _handleUserauthBanner(Uint8List payload) {
     final message = SSH_Message_Userauth_Banner.decode(payload);
     printTrace?.call('<- $socket: $message');
-    
+
     // RFC 4252: Apply control character filtering to prevent terminal attacks
     final sanitizedMessage = _sanitizeBannerMessage(message.message);
-    printDebug?.call('Received authentication banner (${message.message.length} chars, ${sanitizedMessage.length} after sanitization)');
-    
+    printDebug?.call(
+        'Received authentication banner (${message.message.length} chars, ${sanitizedMessage.length} after sanitization)');
+
     onUserauthBanner?.call(sanitizedMessage);
   }
 
@@ -1303,7 +1304,7 @@ extension on SSHClient {
 
 extension on SSHClient {
   /// Sanitize banner message according to RFC 4252 recommendations
-  /// 
+  ///
   /// This method filters control characters to prevent terminal control
   /// character attacks as recommended by RFC 4252.
   String _sanitizeBannerMessage(String message) {
@@ -1312,30 +1313,35 @@ extension on SSHClient {
     const maxLineLength = 1024; // Reasonable limit to prevent DoS
     var totalLength = 0;
     const maxTotalLength = 8192; // Total message size limit
-    
+
     for (int i = 0; i < message.length && totalLength < maxTotalLength; i++) {
       final code = message.codeUnitAt(i);
-      
+
       // RFC 4252: Allow specific control characters
-      if (code == 9) {          // TAB
+      if (code == 9) {
+        // TAB
         buffer.writeCharCode(code);
         lineLength += 4; // Count as 4 chars for line length
         totalLength++;
-      } else if (code == 10) {  // LF (Line Feed)
+      } else if (code == 10) {
+        // LF (Line Feed)
         buffer.writeCharCode(code);
         lineLength = 0; // Reset line length
         totalLength++;
-      } else if (code == 13) {  // CR (Carriage Return)
+      } else if (code == 13) {
+        // CR (Carriage Return)
         buffer.writeCharCode(code);
         // Don't reset line length for CR, might be part of CRLF
         totalLength++;
-      } else if (code >= 32 && code <= 126) { // Printable ASCII
+      } else if (code >= 32 && code <= 126) {
+        // Printable ASCII
         if (lineLength < maxLineLength) {
           buffer.writeCharCode(code);
           lineLength++;
         }
         totalLength++;
-      } else if (code > 127) {  // Non-ASCII (UTF-8)
+      } else if (code > 127) {
+        // Non-ASCII (UTF-8)
         // Allow valid UTF-8 characters but be careful with length
         if (lineLength < maxLineLength) {
           buffer.writeCharCode(code);
@@ -1352,21 +1358,21 @@ extension on SSHClient {
         }
         totalLength += escaped.length;
       }
-      
+
       // Prevent excessively long lines
       if (lineLength >= maxLineLength) {
         buffer.writeln(''); // Force line break
         lineLength = 0;
       }
     }
-    
+
     final result = buffer.toString();
-    
+
     // Log if message was truncated
     if (totalLength >= maxTotalLength) {
       printDebug?.call('Banner message truncated at $maxTotalLength characters for security');
     }
-    
+
     return result;
   }
 }

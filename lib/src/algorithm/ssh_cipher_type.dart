@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/ssh_algorithm.dart';
+import 'package:dartssh2/src/algorithm/chacha20_poly1305.dart';
 import 'package:pointycastle/export.dart';
 
 class SSHCipherType with SSHAlgorithm {
@@ -14,8 +15,7 @@ class SSHCipherType with SSHAlgorithm {
     aes256ctr,
     aes128gcm,
     aes256gcm,
-    // TODO: Uncomment when ChaCha20-Poly1305 implementation is complete
-    // chacha20poly1305,
+    chacha20poly1305,
   ];
 
   static const tdescbc = SSHCipherType._(
@@ -78,13 +78,13 @@ class SSHCipherType with SSHAlgorithm {
     tagSize: 16,
   );
 
-  // static const chacha20poly1305 = SSHCipherType._(
-  //   name: 'chacha20-poly1305@openssh.com',
-  //   keySize: 64, // 32 bytes for ChaCha20 key + 32 bytes for Poly1305 key
-  //   cipherFactory: _chacha20Poly1305Factory,
-  //   isAEAD: true,
-  //   tagSize: 16,
-  // );
+  static const chacha20poly1305 = SSHCipherType._(
+    name: 'chacha20-poly1305@openssh.com',
+    keySize: 64, // 32 bytes for ChaCha20 key + 32 bytes for Poly1305 key
+    cipherFactory: _chacha20Poly1305Factory,
+    isAEAD: true,
+    tagSize: 16,
+  );
 
   static SSHCipherType? fromName(String name) {
     for (final value in values) {
@@ -135,7 +135,7 @@ class SSHCipherType with SSHAlgorithm {
     if (isAEAD) {
       throw StateError('Use createAEADCipher for AEAD modes');
     }
-    
+
     if (key.length != keySize) {
       throw ArgumentError.value(key, 'key', 'Key must be $keySize bytes long');
     }
@@ -159,7 +159,7 @@ class SSHCipherType with SSHAlgorithm {
     if (!isAEAD) {
       throw StateError('Use createCipher for non-AEAD modes');
     }
-    
+
     if (key.length != keySize) {
       throw ArgumentError.value(key, 'key', 'Key must be $keySize bytes long');
     }
@@ -192,4 +192,9 @@ BlockCipher _tdesCbcFactory() {
 /// Creates AES-GCM cipher factory
 AEADBlockCipher _aesGcmFactory() {
   return GCMBlockCipher(AESEngine());
+}
+
+/// Creates ChaCha20-Poly1305 cipher factory
+AEADBlockCipher _chacha20Poly1305Factory() {
+  return SSHChaCha20Poly1305();
 }

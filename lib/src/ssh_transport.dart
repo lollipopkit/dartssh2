@@ -558,12 +558,12 @@ class SSHTransport {
   }
 
   /// Composes challenge data for host-based authentication according to RFC 4252
-  /// 
+  ///
   /// The signature data MUST be constructed in the exact order specified by RFC 4252:
   /// - session identifier
   /// - SSH_MSG_USERAUTH_REQUEST byte
   /// - user name
-  /// - service name  
+  /// - service name
   /// - "hostbased" method name
   /// - public key algorithm for host key
   /// - public host key and certificates for client host
@@ -614,18 +614,18 @@ class SSHTransport {
     }
 
     final writer = SSHMessageWriter();
-    
+
     // RFC 4252: Signature data construction in exact order
-    writer.writeString(_sessionId!);                    // session identifier
+    writer.writeString(_sessionId!); // session identifier
     writer.writeUint8(SSH_Message_Userauth_Request.messageId); // SSH_MSG_USERAUTH_REQUEST
-    writer.writeUtf8(username);                         // user name
-    writer.writeUtf8(service);                          // service name
-    writer.writeUtf8('hostbased');                      // method name
-    writer.writeUtf8(publicKeyAlgorithm);               // public key algorithm for host key
-    writer.writeString(publicKey);                      // public host key and certificates
-    writer.writeUtf8(hostName);                         // client host name (FQDN in US-ASCII)
-    writer.writeUtf8(userNameOnClientHost);             // user name on client host (UTF-8)
-    
+    writer.writeUtf8(username); // user name
+    writer.writeUtf8(service); // service name
+    writer.writeUtf8('hostbased'); // method name
+    writer.writeUtf8(publicKeyAlgorithm); // public key algorithm for host key
+    writer.writeString(publicKey); // public host key and certificates
+    writer.writeUtf8(hostName); // client host name (FQDN in US-ASCII)
+    writer.writeUtf8(userNameOnClientHost); // user name on client host (UTF-8)
+
     return writer.takeBytes();
   }
 

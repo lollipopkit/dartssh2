@@ -15,6 +15,8 @@ void main() {
   testCipher(SSHCipherType.aes256ctr);
   testAEADCipher(SSHCipherType.aes128gcm);
   testAEADCipher(SSHCipherType.aes256gcm);
+  testChaCha20Poly1305(SSHCipherType.chacha20poly1305);
+
   group('SSHAlgorithm', () {
     test('toString() returns correct format', () {
       final algorithm = SSHKexType.x25519;
@@ -127,25 +129,78 @@ void testCipher(SSHCipherType type) {
 void testAEADCipher(SSHCipherType type) {
   test('$type AEAD encrypt/decrypt', () {
     expect(type.isAEAD, isTrue, reason: 'Expected AEAD cipher');
-    
+
     final key = Uint8List(type.keySize);
     final nonce = Uint8List(12); // GCM uses 12-byte nonce
     final aad = Uint8List.fromList('additional data'.codeUnits);
     final plainText = Uint8List.fromList('Hello, AES-GCM!'.codeUnits);
-    
+
     // ENCRYPTION
     final encrypter = type.createAEADCipher(key, nonce, forEncryption: true, aad: aad) as GCMBlockCipher;
     encrypter.processAADBytes(aad, 0, aad.length);
-    
+
     // Use the process method for simpler usage
     final encryptedWithTag = encrypter.process(plainText);
     expect(encryptedWithTag.length, equals(plainText.length + type.tagSize));
-    
+
     // DECRYPTION
     final decrypter = type.createAEADCipher(key, nonce, forEncryption: false, aad: aad) as GCMBlockCipher;
     decrypter.processAADBytes(aad, 0, aad.length);
-    
+
     final decrypted = decrypter.process(encryptedWithTag);
     expect(decrypted, equals(plainText));
+  });
+}
+
+void testChaCha20Poly1305(SSHCipherType type) {
+  test('$type ChaCha20-Poly1305 encrypt/decrypt', () {
+    expect(type.isAEAD, isTrue, reason: 'Expected AEAD cipher');
+    expect(type.name, equals('chacha20-poly1305@openssh.com'));
+    expect(type.keySize, equals(64)); // SSH uses 64 bytes (32 for ChaCha20, 32 for Poly1305)
+    expect(type.tagSize, equals(16));
+
+    final key = Uint8List(type.keySize);
+    for (int i = 0; i < key.length; i++) {
+      key[i] = i % 256;
+    }
+
+    final nonce = Uint8List(12);
+    for (int i = 0; i < nonce.length; i++) {
+      nonce[i] = (i * 17) % 256;
+    }
+
+    final aad = Uint8List.fromList('ChaCha20-Poly1305 test AAD'.codeUnits);
+    final plainText = Uint8List.fromList('Hello, ChaCha20-Poly1305!'.codeUnits);
+
+    // Test basic functionality
+    final cipher = type.createAEADCipher(key, nonce, forEncryption: true, aad: aad);
+    expect(cipher.algorithmName, contains('ChaCha20-Poly1305'));
+    expect(cipher.blockSize, equals(1));
+
+    // Test encrypt and decrypt using the process method
+    final encrypter = type.createAEADCipher(key, nonce, forEncryption: true, aad: aad);
+    final encryptedWithTag = encrypter.process(plainText);
+    expect(encryptedWithTag.length, greaterThanOrEqualTo(plainText.length));
+
+    // Decrypt
+    final decrypter = type.createAEADCipher(key, nonce, forEncryption: false, aad: aad);
+    final decrypted = decrypter.process(encryptedWithTag);
+    expect(decrypted, equals(plainText));
+  });
+
+  test('$type ChaCha20-Poly1305 key size validation', () {
+    expect(() {
+      final key = Uint8List(32); // Wrong size, should be 64
+      final nonce = Uint8List(12);
+      type.createAEADCipher(key, nonce, forEncryption: true);
+    }, throwsArgumentError);
+  });
+
+  test('$type ChaCha20-Poly1305 nonce size validation', () {
+    expect(() {
+      final key = Uint8List(64);
+      final nonce = Uint8List(8); // Wrong size, should be 12
+      type.createAEADCipher(key, nonce, forEncryption: true);
+    }, throwsArgumentError);
   });
 }
