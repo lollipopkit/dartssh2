@@ -8,6 +8,7 @@ import 'package:dartssh2/src/ssh_transport.dart';
 import 'package:dartssh2/src/utils/async_queue.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:dartssh2/src/utils/stream.dart';
+import 'package:dartssh2/src/ssh_flow_control.dart';
 
 /// Handler of channel requests. Return true if the request was handled, false
 /// if the request was not recognized or could not be handled.
@@ -16,8 +17,6 @@ typedef SSHChannelRequestHandler = bool Function(
 );
 
 class SSHChannelController {
-  static const _initialWindowSize = 2 * 1024 * 1024;
-  static const _windowAdjustThreshold = _initialWindowSize / 2;
 
   final int localId;
   final int localMaximumPacketSize;
@@ -31,6 +30,9 @@ class SSHChannelController {
 
   final void Function(SSHMessage) sendMessage;
 
+  /// Enhanced flow control manager
+  late final SSHChannelFlowController _flowController;
+
   SSHChannel get channel => SSHChannel(this);
 
   SSHChannelController({
@@ -43,6 +45,12 @@ class SSHChannelController {
     required this.sendMessage,
     this.printDebug,
   }) {
+    // Initialize the enhanced flow controller
+    _flowController = SSHChannelFlowController(
+      initialWindowSize: localInitialWindowSize,
+      debugPrint: printDebug,
+    );
+    
     if (remoteInitialWindowSize > 0) {
       _uploadLoop.activate();
     }
@@ -224,6 +232,18 @@ class SSHChannelController {
     _done.complete();
   }
 
+  /// Get current flow control statistics for monitoring and debugging
+  Map<String, dynamic> getFlowControlStatistics() {
+    return _flowController.getStatistics();
+  }
+
+  /// Reset flow control state (useful for connection recovery)
+  void resetFlowControl() {
+    _flowController.reset();
+    _localWindow = _flowController.localWindow;
+    _isPausedDueToWindow = false;
+  }
+
   void _handleWindowAdjustMessage(int bytesToAdd) {
     printDebug?.call('SSHChannel._handleWindowAdjustMessage: $bytesToAdd');
 
@@ -247,15 +267,20 @@ class SSHChannelController {
       return;
     }
 
+    // Use flow controller to process incoming data
+    _flowController.processIncomingData(data.length);
+    
+    // Update legacy _localWindow for backwards compatibility
+    _localWindow = _flowController.localWindow;
+
     // If window is negative, don't process more data until window is adjusted
-    if (_isPausedDueToWindow) {
+    if (_isPausedDueToWindow && _localWindow < 0) {
       printDebug?.call('SSHChannel._handleDataMessage: stream paused due to negative window, skipping data');
       return;
     }
 
     _remoteStream.add(SSHChannelData(data, type: type));
 
-    _localWindow -= data.length;
     if (_localWindow < 0) {
       // If window goes negative, pause the stream and immediately request window adjustment
       printDebug?.call('SSHChannel._handleDataMessage: window went negative: $_localWindow');
@@ -330,39 +355,20 @@ class SSHChannelController {
 
     if (_done.isCompleted) return;
 
-    // Only send a window adjust message if the window is below the threshold.
-    // Assumes _windowAdjustThreshold is non-negative.
-    // If _localWindow is negative (an invalid state), it will likely be <= _windowAdjustThreshold.
-    if (_localWindow > _windowAdjustThreshold) return;
-
-    const maxRfcWindowSize = 0xFFFFFFFF; // 2^32 - 1
-
-    // Determine the target window size, respecting RFC limits.
-    // localInitialWindowSize is typically a positive value (e.g., 2MB).
-    final int targetWindow = (localInitialWindowSize > maxRfcWindowSize || localInitialWindowSize < 0)
-        ? maxRfcWindowSize
-        : localInitialWindowSize;
-
-    // If the current local window is already at or above the target,
-    // no further increase is needed.
-    if (_localWindow >= targetWindow) {
-      // As a defensive measure, if _localWindow somehow exceeded the absolute max,
-      // cap it. This is more about correcting an invalid state than calculating
-      // bytesToAdd for this specific adjustment.
-      if (_localWindow > maxRfcWindowSize) {
-        _localWindow = maxRfcWindowSize;
-      }
+    // Use the enhanced flow controller to determine if adjustment is needed
+    if (!_flowController.needsWindowAdjustment) {
       return;
     }
 
-    // At this point, _localWindow < targetWindow.
-    // Calculate the number of bytes to add to reach the targetWindow.
-    // This will be a positive value. If _localWindow was negative (erroneous state),
-    // bytesToAdd will be appropriately larger to compensate.
-    final int bytesToAdd = targetWindow - _localWindow;
+    // Calculate optimal window adjustment using adaptive algorithm
+    final bytesToAdd = _flowController.calculateWindowAdjustment();
+    
+    if (bytesToAdd <= 0) {
+      return;
+    }
 
-    // Update our local window state to reflect the window size we are now advertising.
-    _localWindow = targetWindow;
+    // Update legacy _localWindow for backwards compatibility
+    _localWindow = _flowController.localWindow;
 
     sendMessage(SSH_Message_Channel_Window_Adjust(
       recipientChannel: remoteId,
@@ -373,6 +379,10 @@ class SSHChannelController {
     if (_isPausedDueToWindow) {
       _isPausedDueToWindow = false;
     }
+    
+    // Log flow control statistics periodically
+    final stats = _flowController.getStatistics();
+    printDebug?.call('SSHChannel: Flow control stats - BW: ${stats['estimatedBandwidth']}, RTT: ${stats['estimatedRtt']}, Window: ${stats['currentWindowSize']}');
   }
 
   late final _uploadLoop = OnceSimultaneously(() async {
@@ -485,6 +495,16 @@ class SSHChannel {
   /// Destroys the channel in both directions. After calling this method,
   /// no more data can be sent or received.
   void destroy() => _controller.destroy();
+
+  /// Get current flow control statistics for performance monitoring
+  Map<String, dynamic> getFlowControlStatistics() {
+    return _controller.getFlowControlStatistics();
+  }
+
+  /// Reset flow control state (useful for connection recovery scenarios)
+  void resetFlowControl() {
+    _controller.resetFlowControl();
+  }
 
   @override
   String toString() => 'SSHChannel($channelId:$remoteChannelId)';

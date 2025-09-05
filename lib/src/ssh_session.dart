@@ -32,6 +32,16 @@ class SSHSession {
   /// be available on the [stdout] and [stderr] streams at this time.
   Future<void> get done => _channel.done;
 
+  /// Get current flow control statistics for performance monitoring
+  Map<String, dynamic> getFlowControlStatistics() {
+    return _channel.getFlowControlStatistics();
+  }
+
+  /// Reset flow control state (useful for connection recovery scenarios)
+  void resetFlowControl() {
+    _channel.resetFlowControl();
+  }
+
   SSHSession(this._channel) {
     _channel.setRequestHandler(_handleRequest);
 

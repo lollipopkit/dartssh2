@@ -1,6 +1,7 @@
 export 'src/ssh_algorithm.dart' show SSHAlgorithms;
 export 'src/ssh_client.dart';
 export 'src/ssh_errors.dart';
+export 'src/ssh_flow_control.dart';
 export 'src/ssh_forward.dart';
 export 'src/ssh_key_pair.dart';
 export 'src/ssh_pem.dart';
