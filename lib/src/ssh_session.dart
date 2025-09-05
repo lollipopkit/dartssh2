@@ -108,6 +108,29 @@ class SSHSession {
     );
   }
 
+  /// Request X11 forwarding for this session. This enables X11 applications
+  /// started in this session to display their GUI windows locally.
+  /// 
+  /// [singleConnection] - If true, only one X11 connection will be forwarded
+  /// [authenticationProtocol] - X11 authentication protocol (default: MIT-MAGIC-COOKIE-1)
+  /// [authenticationCookie] - X11 authentication cookie (generated if not provided)
+  /// [screenNumber] - X11 screen number (default: 0)
+  /// 
+  /// Returns true if the X11 forwarding request was successful
+  Future<bool> requestX11Forwarding({
+    bool singleConnection = false,
+    String authenticationProtocol = 'MIT-MAGIC-COOKIE-1',
+    String? authenticationCookie,
+    String screenNumber = '0',
+  }) async {
+    return await _channel.sendX11Req(
+      singleConnection: singleConnection,
+      authenticationProtocol: authenticationProtocol,
+      authenticationCookie: authenticationCookie,
+      screenNumber: screenNumber,
+    );
+  }
+
   /// Close the session. After this call, the session is no longer usable.
   void close() {
     _channel.close();

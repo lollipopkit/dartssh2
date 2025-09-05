@@ -144,6 +144,28 @@ class SSHChannelController {
     return await _requestReplyQueue.next;
   }
 
+  Future<bool> sendX11Req({
+    bool singleConnection = false,
+    String authenticationProtocol = 'MIT-MAGIC-COOKIE-1',
+    String? authenticationCookie,
+    String screenNumber = '0',
+  }) async {
+    // Generate a random cookie if not provided
+    final cookie = authenticationCookie ?? _generateX11Cookie();
+    
+    sendMessage(
+      SSH_Message_Channel_Request.x11(
+        recipientChannel: remoteId,
+        wantReply: true,
+        singleConnection: singleConnection,
+        x11AuthenticationProtocol: authenticationProtocol,
+        x11AuthenticationCookie: cookie,
+        x11ScreenNumber: screenNumber,
+      ),
+    );
+    return await _requestReplyQueue.next;
+  }
+
   void sendEnv(String name, String value) {
     sendMessage(
       SSH_Message_Channel_Request.env(
@@ -435,6 +457,16 @@ class SSHChannelController {
       _remoteWindow -= data.bytes.length;
     }
   });
+
+  /// Generate a random X11 authentication cookie
+  String _generateX11Cookie() {
+    final random = Random.secure();
+    final bytes = Uint8List(16);
+    for (int i = 0; i < bytes.length; i++) {
+      bytes[i] = random.nextInt(256);
+    }
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('');
+  }
 }
 
 class SSHChannel {
@@ -497,6 +529,20 @@ class SSHChannel {
 
   Future<bool> sendAuthAgent() async {
     return await _controller.sendAuthAgent();
+  }
+
+  Future<bool> sendX11Req({
+    bool singleConnection = false,
+    String authenticationProtocol = 'MIT-MAGIC-COOKIE-1',
+    String? authenticationCookie,
+    String screenNumber = '0',
+  }) async {
+    return await _controller.sendX11Req(
+      singleConnection: singleConnection,
+      authenticationProtocol: authenticationProtocol,
+      authenticationCookie: authenticationCookie,
+      screenNumber: screenNumber,
+    );
   }
 
   /// Closes our side of the channel. Returns a [Future] that completes when
