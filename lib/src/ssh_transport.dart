@@ -69,6 +69,9 @@ class SSHTransport {
   /// Function called when a packet is received.
   final SSHPacketHandler? onPacket;
 
+  /// Function called to check if authentication is complete (for delayed compression).
+  final bool Function()? isAuthenticated;
+
   /// A [Future] that completes when the transport is closed, or when an error
   /// occurs. After this [Future] completes, [isClosed] will be true and no
   /// more data can be sent or received.
@@ -91,6 +94,7 @@ class SSHTransport {
     this.onVerifyHostKey,
     this.onReady,
     this.onPacket,
+    this.isAuthenticated,
     Duration reKeyInterval = const Duration(hours: 1),
   }) : _reKeyInterval = reKeyInterval {
     _initSocket();
@@ -194,7 +198,17 @@ class SSHTransport {
     }
 
     // Apply compression if negotiated (we are always client, so use client compression for outgoing data)
-    final compressedData = _clientCompressionType?.compress(data) ?? data;
+    Uint8List compressedData;
+    if (_clientCompressionType?.isDelayed == true) {
+      // For delayed compression (zlib@openssh.com), only compress after authentication
+      if (isAuthenticated?.call() == true) {
+        compressedData = _clientCompressionType!.compress(data);
+      } else {
+        compressedData = data;
+      }
+    } else {
+      compressedData = _clientCompressionType?.compress(data) ?? data;
+    }
 
     final packetAlign =
         _encryptCipher == null ? SSHPacket.minAlign : max(SSHPacket.minAlign, _encryptCipher!.blockSize);
@@ -380,7 +394,16 @@ class SSHTransport {
 
     final payload = Uint8List.sublistView(packet, 5, packet.length - paddingLength);
     // Apply decompression if negotiated (we are client, so decompress using server compression for incoming data)
-    return _serverCompressionType?.decompress(payload) ?? payload;
+    if (_serverCompressionType?.isDelayed == true) {
+      // For delayed compression (zlib@openssh.com), only decompress after authentication
+      if (isAuthenticated?.call() == true) {
+        return _serverCompressionType!.decompress(payload);
+      } else {
+        return payload;
+      }
+    } else {
+      return _serverCompressionType?.decompress(payload) ?? payload;
+    }
   }
 
   Uint8List? _consumeEncryptedPacket() {
@@ -419,7 +442,16 @@ class SSHTransport {
 
     final payload = Uint8List.sublistView(packet, 5, packet.length - paddingLength);
     // Apply decompression if negotiated (we are client, so decompress using server compression for incoming data)
-    return _serverCompressionType?.decompress(payload) ?? payload;
+    if (_serverCompressionType?.isDelayed == true) {
+      // For delayed compression (zlib@openssh.com), only decompress after authentication
+      if (isAuthenticated?.call() == true) {
+        return _serverCompressionType!.decompress(payload);
+      } else {
+        return payload;
+      }
+    } else {
+      return _serverCompressionType?.decompress(payload) ?? payload;
+    }
   }
 
   void _verifyPacketLength(int packetLength) {

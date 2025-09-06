@@ -7,18 +7,28 @@ class SSHCompressionType with SSHAlgorithm {
   static const values = [
     none,
     zlib,
+    zlibOpenSSH,
   ];
 
   static const none = SSHCompressionType._(
     name: 'none',
     compressor: null,
     decompressor: null,
+    isDelayed: false,
   );
 
   static const zlib = SSHCompressionType._(
     name: 'zlib',
     compressor: _zlibCompressor,
     decompressor: _zlibDecompressor,
+    isDelayed: false,
+  );
+
+  static const zlibOpenSSH = SSHCompressionType._(
+    name: 'zlib@openssh.com',
+    compressor: _zlibCompressor,
+    decompressor: _zlibDecompressor,
+    isDelayed: true,
   );
 
   @override
@@ -26,11 +36,13 @@ class SSHCompressionType with SSHAlgorithm {
 
   final Uint8List Function(Uint8List)? compressor;
   final Uint8List Function(Uint8List)? decompressor;
+  final bool isDelayed;
 
   const SSHCompressionType._({
     required this.name,
     required this.compressor,
     required this.decompressor,
+    this.isDelayed = false,
   });
 
   bool get isNone => compressor == null && decompressor == null;

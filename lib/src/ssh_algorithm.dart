@@ -132,6 +132,7 @@ class SSHAlgorithms {
     ],
     this.compression = const [
       SSHCompressionType.zlib,
+      SSHCompressionType.zlibOpenSSH,
       SSHCompressionType.none,
     ],
     this.certificate = const [

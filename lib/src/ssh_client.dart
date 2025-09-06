@@ -147,6 +147,9 @@ class SSHClient {
   /// Username of clinet host used for hostbased authentication.
   final String? userNameOnClientHost;
 
+  /// Certificates to use for certificate authentication.
+  final List<SSHKeyPair>? certificates;
+
   /// Auth timeout, 10m by default.
   final Duration authTimeout;
 
@@ -187,6 +190,7 @@ class SSHClient {
       this.hostbasedIdentities,
       this.hostName,
       this.userNameOnClientHost,
+      this.certificates,
       this.onPasswordRequest,
       this.onChangePasswordRequest,
       this.onUserInfoRequest,
@@ -213,6 +217,7 @@ class SSHClient {
       onVerifyHostKey: onVerifyHostKey,
       onReady: _handleTransportReady,
       onPacket: _handlePacket,
+      isAuthenticated: () => _authenticated.isCompleted,
     );
 
     _transport.done.then(
@@ -231,6 +236,11 @@ class SSHClient {
     // 初始化 hostbased 密钥队列
     if (hostbasedIdentities != null) {
       _hostbasedKeyPairsLeft.addAll(hostbasedIdentities!);
+    }
+
+    // 初始化证书队列
+    if (certificates != null) {
+      _certificatesLeft.addAll(certificates!);
     }
 
     // 添加认证超时定时器
@@ -276,6 +286,8 @@ class SSHClient {
   final _authMethodsLeft = Queue<SSHAuthMethod>();
 
   final _keyPairsLeft = Queue<SSHKeyPair>();
+
+  final _certificatesLeft = Queue<SSHKeyPair>();
 
   final _remoteForwards = <SSHRemoteForward>{};
 
@@ -1138,6 +1150,8 @@ class SSHClient {
         return _authWithKeyboardInteractive();
       case SSHAuthMethod.hostbased:
         return _authWithNextHostbased();
+      case SSHAuthMethod.certificate:
+        return _authWithNextCertificate();
     }
   }
 
@@ -1194,6 +1208,35 @@ class SSHClient {
         publicKey: keyPair.toPublicKey().encode(),
         signature: keyPair.sign(challenge).encode(),
         // signature: null,
+      ),
+    );
+  }
+
+  void _authWithNextCertificate() {
+    printDebug?.call('SSHClient._authWithCertificate');
+    _authAttempts++;
+
+    if (_certificatesLeft.isEmpty) {
+      _tryNextAuthMethod();
+      return;
+    }
+
+    final certificate = _certificatesLeft.removeFirst();
+
+    // For certificate authentication, we use the public key method with certificate data
+    final challenge = _transport.composeChallenge(
+      username: username,
+      service: 'ssh-connection',
+      publicKeyAlgorithm: certificate.type,
+      publicKey: certificate.toPublicKey().encode(),
+    );
+
+    _sendMessage(
+      SSH_Message_Userauth_Request.publicKey(
+        username: username,
+        publicKeyAlgorithm: certificate.type,
+        publicKey: certificate.toPublicKey().encode(),
+        signature: certificate.sign(challenge).encode(),
       ),
     );
   }
