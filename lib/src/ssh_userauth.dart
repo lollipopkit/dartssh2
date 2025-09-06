@@ -4,6 +4,7 @@ enum SSHAuthMethod {
   publicKey,
   keyboardInteractive,
   hostbased,
+  certificate,
 }
 
 extension SSHAuthMethodX on SSHAuthMethod {
@@ -19,6 +20,8 @@ extension SSHAuthMethodX on SSHAuthMethod {
         return 'keyboard-interactive';
       case SSHAuthMethod.hostbased:
         return 'hostbased';
+      case SSHAuthMethod.certificate:
+        return 'publickey'; // Certificate auth uses publickey method with certificate
     }
   }
 }

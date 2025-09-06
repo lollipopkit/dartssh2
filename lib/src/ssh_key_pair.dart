@@ -10,6 +10,7 @@ import 'package:dartssh2/src/hostkey/hostkey_ed25519.dart';
 import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
 import 'package:dartssh2/src/ssh_hostkey.dart';
 import 'package:dartssh2/src/message/base.dart';
+import 'package:dartssh2/src/algorithm/ssh_certificate_type.dart';
 import 'package:dartssh2/src/utils/bcrypt.dart';
 import 'package:dartssh2/src/utils/cipher_ext.dart';
 import 'package:dartssh2/src/utils/list.dart';
@@ -26,6 +27,9 @@ abstract class SSHKeyPair {
       case 'RSA PRIVATE KEY':
         final pair = RsaKeyPair.decode(pem);
         return [pair.getPrivateKeys(passphrase)];
+      case 'CERTIFICATE':
+        final cert = SSHCertificate.decode(pem.content);
+        return [cert];
       default:
         throw UnsupportedError('Unsupported key type: ${pem.type}');
     }
@@ -40,6 +44,8 @@ abstract class SSHKeyPair {
       case 'RSA PRIVATE KEY':
         final pair = RsaKeyPair.decode(pem);
         return pair.isEncrypted;
+      case 'CERTIFICATE':
+        return false; // Certificates are not encrypted
       default:
         throw UnsupportedError('Unsupported key type: ${pem.type}');
     }
@@ -712,5 +718,235 @@ class RsaPrivateKey implements SSHKeyPair {
   @override
   String toString() {
     return '$runtimeType(version: $version)';
+  }
+}
+
+/// SSH Certificate implementation
+abstract class SSHCertificate implements SSHKeyPair {
+  final SSHCertificateType certificateType;
+  final Uint8List certificateData;
+  DateTime? notValidBefore;
+  DateTime? notValidAfter;
+  String? subject;
+  String? issuer;
+
+  SSHCertificate({
+    required this.certificateType,
+    required this.certificateData,
+    this.notValidBefore,
+    this.notValidAfter,
+    this.subject,
+    this.issuer,
+  });
+
+  /// Creates a certificate from PEM encoded data
+  factory SSHCertificate.decode(Uint8List certData) {
+    // Determine certificate type based on content
+    if (_isX509Certificate(certData)) {
+      return SSHX509Certificate._fromData(certData);
+    } else if (_isOpenSSHCertificate(certData)) {
+      return SSHOpenSSHCertificate._fromData(certData);
+    } else {
+      throw FormatException('Unsupported certificate format');
+    }
+  }
+
+  static bool _isX509Certificate(Uint8List data) {
+    // Basic X.509 certificate detection
+    if (data.length < 4) return false;
+    if (data[0] != 0x30) return false; // SEQUENCE tag
+    return true;
+  }
+
+  static bool _isOpenSSHCertificate(Uint8List data) {
+    // Basic OpenSSH certificate detection
+    if (data.length < 8) return false;
+    // TODO: Implement OpenSSH certificate detection
+    return false;
+  }
+
+  /// Validates the certificate
+  bool isValid([DateTime? currentTime]) {
+    final now = currentTime ?? DateTime.now();
+    
+    if (notValidBefore != null && now.isBefore(notValidBefore!)) {
+      return false;
+    }
+    
+    if (notValidAfter != null && now.isAfter(notValidAfter!)) {
+      return false;
+    }
+    
+    return _validateCertificate();
+  }
+
+  /// Certificate-specific validation logic
+  bool _validateCertificate();
+
+  @override
+  String toPem() {
+    return SSHPem('CERTIFICATE', {}, certificateData).encode(64);
+  }
+}
+
+/// X.509 v3 certificate implementation
+class SSHX509Certificate extends SSHCertificate {
+  SSHX509Certificate({
+    required super.certificateData,
+    super.notValidBefore,
+    super.notValidAfter,
+    super.subject,
+    super.issuer,
+  }) : super(certificateType: SSHCertificateType.x509v3);
+
+  SSHX509Certificate._fromData(Uint8List certData) 
+      : super(
+          certificateType: SSHCertificateType.x509v3,
+          certificateData: certData,
+        );
+
+  @override
+  String get name => 'x509v3@openssh.com';
+
+  @override
+  String get type => 'x509v3@openssh.com';
+
+  @override
+  SSHHostKey toPublicKey() {
+    // Extract public key from X.509 certificate
+    return _extractPublicKeyFromX509();
+  }
+
+  @override
+  SSHSignature sign(Uint8List data) {
+    throw UnsupportedError('Certificates cannot sign data directly');
+  }
+
+  SSHHostKey _extractPublicKeyFromX509() {
+    try {
+      final parser = ASN1Parser(certificateData);
+      final certSequence = parser.nextObject() as ASN1Sequence;
+      
+      // Extract tbsCertificate
+      final tbsCert = certSequence.elements[0] as ASN1Sequence;
+      
+      // Extract subjectPublicKeyInfo
+      final subjectPublicKeyInfo = tbsCert.elements[6] as ASN1Sequence;
+      
+      // Extract algorithm and public key
+      final algorithm = subjectPublicKeyInfo.elements[0] as ASN1Sequence;
+      final algorithmId = (algorithm.elements[0] as ASN1ObjectIdentifier).identifier;
+      
+      final publicKeyBitString = subjectPublicKeyInfo.elements[1] as ASN1BitString;
+      final publicKeyBytes = publicKeyBitString.valueBytes();
+      
+      // Map algorithm to SSH host key type
+      if (algorithmId?.contains('1.2.840.113549.1.1.1') ?? false) { // RSA
+        final publicKeyParser = ASN1Parser(publicKeyBytes);
+        final publicKeySeq = publicKeyParser.nextObject() as ASN1Sequence;
+        final modulus = (publicKeySeq.elements[0] as ASN1Integer).valueAsBigInteger;
+        final exponent = (publicKeySeq.elements[1] as ASN1Integer).valueAsBigInteger;
+        return SSHRsaPublicKey(exponent, modulus);
+      } else if (algorithmId?.contains('1.2.840.10045.2.1') ?? false) { // ECDSA
+        // TODO: Implement ECDSA public key extraction
+        throw UnimplementedError('ECDSA public key extraction from X.509 not yet implemented');
+      } else if (algorithmId?.contains('1.3.101.112') ?? false) { // Ed25519
+        // TODO: Implement Ed25519 public key extraction
+        throw UnimplementedError('Ed25519 public key extraction from X.509 not yet implemented');
+      } else {
+        throw UnsupportedError('Unsupported public key algorithm: $algorithmId');
+      }
+    } catch (e) {
+      throw SSHKeyDecodeError('Failed to extract public key from X.509 certificate', e);
+    }
+  }
+
+  @override
+  bool _validateCertificate() {
+    try {
+      final parser = ASN1Parser(certificateData);
+      final certSequence = parser.nextObject() as ASN1Sequence;
+      
+      // Extract validity period
+      final tbsCert = certSequence.elements[0] as ASN1Sequence;
+      final validity = tbsCert.elements[4] as ASN1Sequence;
+      
+      final notBefore = validity.elements[0] as ASN1UtcTime;
+      final notAfter = validity.elements[1] as ASN1UtcTime;
+      
+      // Update validity times if not already set
+      notValidBefore ??= _parseDateTime(notBefore);
+      notValidAfter ??= _parseDateTime(notAfter);
+      
+      // Extract subject and issuer
+      final subjectName = tbsCert.elements[5] as ASN1Sequence;
+      final issuerName = certSequence.elements[2] as ASN1Sequence;
+      
+      subject ??= _parseName(subjectName);
+      issuer ??= _parseName(issuerName);
+      
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  DateTime _parseDateTime(ASN1UtcTime utcTime) {
+    // Parse ASN1UtcTime to DateTime
+    try {
+      return DateTime.parse(utcTime.dateTimeValue.toIso8601String());
+    } catch (e) {
+      return DateTime.now(); // Fallback to current time
+    }
+  }
+
+  String _parseName(ASN1Sequence nameSequence) {
+    // Simple name parsing - in real implementation, this would be more complex
+    return nameSequence.toString();
+  }
+}
+
+/// OpenSSH certificate implementation
+class SSHOpenSSHCertificate extends SSHCertificate {
+  SSHOpenSSHCertificate({
+    required super.certificateData,
+    super.notValidBefore,
+    super.notValidAfter,
+    super.subject,
+    super.issuer,
+  }) : super(certificateType: SSHCertificateType.openssh);
+
+  SSHOpenSSHCertificate._fromData(Uint8List certData) 
+      : super(
+          certificateType: SSHCertificateType.openssh,
+          certificateData: certData,
+        );
+
+  @override
+  String get name => 'ssh-cert-v01@openssh.com';
+
+  @override
+  String get type => 'ssh-cert-v01@openssh.com';
+
+  @override
+  SSHHostKey toPublicKey() {
+    // Extract public key from OpenSSH certificate
+    return _extractPublicKeyFromOpenSSH();
+  }
+
+  @override
+  SSHSignature sign(Uint8List data) {
+    throw UnsupportedError('Certificates cannot sign data directly');
+  }
+
+  SSHHostKey _extractPublicKeyFromOpenSSH() {
+    // TODO: Implement OpenSSH certificate public key extraction
+    throw UnimplementedError('OpenSSH public key extraction not yet implemented');
+  }
+
+  @override
+  bool _validateCertificate() {
+    // TODO: Implement OpenSSH certificate validation
+    return true;
   }
 }

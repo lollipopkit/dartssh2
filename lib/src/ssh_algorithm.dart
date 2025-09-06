@@ -3,6 +3,7 @@ import 'package:dartssh2/src/algorithm/ssh_compression_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_hostkey_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_kex_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_mac_type.dart';
+import 'package:dartssh2/src/algorithm/ssh_certificate_type.dart';
 
 mixin SSHAlgorithm {
   String get name;
@@ -90,6 +91,9 @@ class SSHAlgorithms {
   /// Algorithm used for compression.
   final List<SSHCompressionType> compression;
 
+  /// Algorithm used for certificate authentication.
+  final List<SSHCertificateType> certificate;
+
   const SSHAlgorithms({
     this.kex = const [
       SSHKexType.x25519,
@@ -129,6 +133,10 @@ class SSHAlgorithms {
     this.compression = const [
       SSHCompressionType.zlib,
       SSHCompressionType.none,
+    ],
+    this.certificate = const [
+      SSHCertificateType.x509v3,
+      SSHCertificateType.openssh,
     ],
   });
 }

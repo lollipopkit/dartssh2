@@ -1,9 +1,11 @@
 import 'ssh_userauth.dart';
+import 'algorithm/ssh_certificate_type.dart';
 
 /// Security policy for authentication method prioritization
 class SSHAuthPolicy {
   /// Default authentication method order (most secure first)
   static const List<SSHAuthMethod> _defaultMethodOrder = [
+    SSHAuthMethod.certificate,
     SSHAuthMethod.publicKey,
     SSHAuthMethod.hostbased,
     SSHAuthMethod.keyboardInteractive,
@@ -30,6 +32,7 @@ class SSHAuthPolicy {
     Map<SSHAuthMethod, int>? methodPriorities,
   })  : methodOrder = methodOrder ?? _defaultMethodOrder,
         methodPriorities = methodPriorities ?? {
+          SSHAuthMethod.certificate: 120,
           SSHAuthMethod.publicKey: 100,
           SSHAuthMethod.hostbased: 90,
           SSHAuthMethod.keyboardInteractive: 80,
@@ -46,15 +49,18 @@ class SSHAuthPolicy {
     final priorities = <SSHAuthMethod, int>{};
 
     if (requirePublicKey) {
-      order.addAll([SSHAuthMethod.publicKey]);
+      order.addAll([SSHAuthMethod.certificate, SSHAuthMethod.publicKey]);
+      priorities[SSHAuthMethod.certificate] = 120;
       priorities[SSHAuthMethod.publicKey] = 100;
     } else {
       order.addAll([
+        SSHAuthMethod.certificate,
         SSHAuthMethod.publicKey,
         SSHAuthMethod.hostbased,
         SSHAuthMethod.keyboardInteractive,
       ]);
       priorities.addAll({
+        SSHAuthMethod.certificate: 120,
         SSHAuthMethod.publicKey: 100,
         SSHAuthMethod.hostbased: 90,
         SSHAuthMethod.keyboardInteractive: 80,
@@ -80,6 +86,7 @@ class SSHAuthPolicy {
   factory SSHAuthPolicy.compatibilityFocused() {
     return SSHAuthPolicy(
       methodOrder: [
+        SSHAuthMethod.certificate,
         SSHAuthMethod.publicKey,
         SSHAuthMethod.password,
         SSHAuthMethod.keyboardInteractive,
@@ -88,6 +95,7 @@ class SSHAuthPolicy {
       strictMode: false,
       minSecurityLevel: SSHSecurityLevel.standard,
       methodPriorities: {
+        SSHAuthMethod.certificate: 110,
         SSHAuthMethod.publicKey: 90,
         SSHAuthMethod.password: 85,
         SSHAuthMethod.keyboardInteractive: 80,
@@ -160,6 +168,18 @@ class SSHAuthMethodSecurity {
 
   /// Security information for all authentication methods
   static const Map<SSHAuthMethod, SSHAuthMethodSecurity> securityInfo = {
+    SSHAuthMethod.certificate: SSHAuthMethodSecurity(
+      method: SSHAuthMethod.certificate,
+      securityLevel: SSHSecurityLevel.maximum,
+      description: 'Certificate-based authentication using X.509 or OpenSSH certificates',
+      securityConsiderations: [
+        'Most secure authentication method with PKI infrastructure',
+        'Supports certificate revocation and lifecycle management',
+        'Enables centralized trust management',
+        'Provides strong identity verification with expiration dates',
+        'Supports X.509 v3 and OpenSSH certificate formats',
+      ],
+    ),
     SSHAuthMethod.publicKey: SSHAuthMethodSecurity(
       method: SSHAuthMethod.publicKey,
       securityLevel: SSHSecurityLevel.maximum,
