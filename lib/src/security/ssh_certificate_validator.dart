@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:dartssh2/src/algorithm/ssh_certificate_type.dart';
 import 'package:dartssh2/src/ssh_key_pair.dart';
 

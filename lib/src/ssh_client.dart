@@ -1427,7 +1427,7 @@ class SSHClient {
         _tryNextAuthMethod();
       });
     } else {
-      final credentials = credentialsFuture as SSHGSSAPICredentials?;
+      final credentials = credentialsFuture;
       if (credentials != null) {
         _startGSSAPIAuthentication(credentials);
       } else {

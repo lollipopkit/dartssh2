@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:dartssh2/dartssh2.dart';
 
 /// Example demonstrating enhanced security policies for authentication method prioritization
@@ -10,10 +9,10 @@ void main() async {
   );
 
   // Example 2: Compatibility-focused policy (supports older servers)
-  final compatibilityPolicy = SSHAuthPolicy.compatibilityFocused();
+  final _ = SSHAuthPolicy.compatibilityFocused();
 
   // Example 3: Custom policy with specific method order and priorities
-  final customPolicy = SSHAuthPolicy(
+  SSHAuthPolicy(
     methodOrder: [
       SSHAuthMethod.publicKey,
       SSHAuthMethod.keyboardInteractive,
@@ -31,7 +30,7 @@ void main() async {
   );
 
   // Example 4: High-security policy (strict mode, only allows strong methods)
-  final highSecurityPolicy = SSHAuthPolicy(
+  SSHAuthPolicy(
     methodOrder: [
       SSHAuthMethod.publicKey,
       SSHAuthMethod.hostbased,

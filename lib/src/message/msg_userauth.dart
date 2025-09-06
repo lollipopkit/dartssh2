@@ -279,10 +279,10 @@ class SSH_Message_Userauth_Request extends SSHMessage {
         // Read optional token
         Uint8List? token;
         Uint8List? mic;
-        if (reader.available > 0) {
+        if (!reader.isDone) {
           token = reader.readString();
         }
-        if (reader.available > 0) {
+        if (!reader.isDone) {
           mic = reader.readString();
         }
         return SSH_Message_Userauth_Request(
@@ -732,7 +732,7 @@ class SSH_Message_Userauth_GSSAPI_Error implements SSHMessage {
       majorStatus: Uint32List.fromList([majorStatus]),
       minorStatus: Uint32List.fromList([minorStatus]),
       message: message,
-      languageTag: languageTag.isEmpty ? null : languageTag,
+      languageTag: languageTag.isEmpty ? null : reader.readUtf8(),
     );
   }
 

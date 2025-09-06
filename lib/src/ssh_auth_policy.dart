@@ -1,5 +1,4 @@
 import 'ssh_userauth.dart';
-import 'algorithm/ssh_certificate_type.dart';
 
 /// Security policy for authentication method prioritization
 class SSHAuthPolicy {

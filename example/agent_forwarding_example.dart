@@ -25,7 +25,7 @@ void main() async {
       print('Error: ${String.fromCharCodes(data)}');
     }
     
-    print('Exit code: ${await session.exitCode}');
+    print('Exit code: ${session.exitCode}');
     
   } catch (e) {
     print('Error: $e');
