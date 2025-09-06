@@ -16,6 +16,14 @@ abstract class SSHUserAuthMessageNumbers {
   static const int SSH_MSG_USERAUTH_PASSWD_CHANGEREQ = 60;
   static const int SSH_MSG_USERAUTH_INFO_REQUEST = 60;
   static const int SSH_MSG_USERAUTH_INFO_RESPONSE = 61;
+  
+  /// GSSAPI-specific message numbers (RFC 4462 Section 3)
+  static const int SSH_MSG_USERAUTH_GSSAPI_RESPONSE = 60;
+  static const int SSH_MSG_USERAUTH_GSSAPI_TOKEN = 61;
+  static const int SSH_MSG_USERAUTH_GSSAPI_EXCHANGE_COMPLETE = 63;
+  static const int SSH_MSG_USERAUTH_GSSAPI_ERROR = 64;
+  static const int SSH_MSG_USERAUTH_GSSAPI_ERRTOK = 65;
+  static const int SSH_MSG_USERAUTH_GSSAPI_MIC = 66;
 
   /// Validate message number is in correct range
   static bool isValidAuthMessageId(int messageId) {
@@ -54,6 +62,12 @@ class SSH_Message_Userauth_Request extends SSHMessage {
   final String? hostName;
   final String? userNameOnClientHost;
 
+  /* 'gssapi' method specific fields */
+
+  final List<String>? gssapiMechanismOids;
+  final Uint8List? gssapiToken;
+  final Uint8List? gssapiMic;
+
   SSH_Message_Userauth_Request({
     required this.user,
     required this.serviceName,
@@ -69,6 +83,9 @@ class SSH_Message_Userauth_Request extends SSHMessage {
     this.hostKey,
     this.hostName,
     this.userNameOnClientHost,
+    this.gssapiMechanismOids,
+    this.gssapiToken,
+    this.gssapiMic,
   });
 
   /// Creates a password authentication request.
@@ -253,6 +270,29 @@ class SSH_Message_Userauth_Request extends SSHMessage {
           userNameOnClientHost: userNameOnClientHost,
           signature: signature,
         );
+      case 'gssapi-with-mic':
+        final oidCount = reader.readUint32();
+        final mechanismOids = <String>[];
+        for (var i = 0; i < oidCount; i++) {
+          mechanismOids.add(reader.readUtf8());
+        }
+        // Read optional token
+        Uint8List? token;
+        Uint8List? mic;
+        if (reader.available > 0) {
+          token = reader.readString();
+        }
+        if (reader.available > 0) {
+          mic = reader.readString();
+        }
+        return SSH_Message_Userauth_Request(
+          user: user,
+          serviceName: serviceName,
+          methodName: methodName,
+          gssapiMechanismOids: mechanismOids,
+          gssapiToken: token,
+          gssapiMic: mic,
+        );
       case 'none':
         return SSH_Message_Userauth_Request.none(
           user: user,
@@ -299,6 +339,21 @@ class SSH_Message_Userauth_Request extends SSHMessage {
         writer.writeUtf8(hostName!);
         writer.writeUtf8(userNameOnClientHost!);
         writer.writeString(signature!);
+        break;
+      case 'gssapi-with-mic':
+        // RFC 4462 Section 3.1: GSSAPI mechanism OIDs
+        writer.writeUint32(gssapiMechanismOids!.length);
+        for (var oid in gssapiMechanismOids!) {
+          writer.writeUtf8(oid);
+        }
+        // GSSAPI token for initial request
+        if (gssapiToken != null) {
+          writer.writeString(gssapiToken!);
+        }
+        // GSSAPI MIC for authentication
+        if (gssapiMic != null) {
+          writer.writeString(gssapiMic!);
+        }
         break;
       case 'none':
         break;
@@ -545,5 +600,223 @@ class SSH_Message_Userauth_InfoResponse implements SSHMessage {
   @override
   String toString() {
     return '$runtimeType(responses: $responses)';
+  }
+}
+
+/// GSSAPI response message (RFC 4462 Section 3.2)
+class SSH_Message_Userauth_GSSAPI_Response implements SSHMessage {
+  /// 60
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_GSSAPI_RESPONSE;
+
+  final List<String> mechanismOids;
+
+  SSH_Message_Userauth_GSSAPI_Response({
+    required this.mechanismOids,
+  });
+
+  factory SSH_Message_Userauth_GSSAPI_Response.decode(Uint8List bytes) {
+    final reader = SSHMessageReader(bytes);
+    reader.skip(1);
+    final oidCount = reader.readUint32();
+    final mechanismOids = <String>[];
+    for (var i = 0; i < oidCount; i++) {
+      mechanismOids.add(reader.readUtf8());
+    }
+    return SSH_Message_Userauth_GSSAPI_Response(
+      mechanismOids: mechanismOids,
+    );
+  }
+
+  @override
+  Uint8List encode() {
+    final writer = SSHMessageWriter();
+    writer.writeUint8(messageId);
+    writer.writeUint32(mechanismOids.length);
+    for (var oid in mechanismOids) {
+      writer.writeUtf8(oid);
+    }
+    return writer.takeBytes();
+  }
+
+  @override
+  String toString() {
+    return "$runtimeType(mechanismOids: $mechanismOids)";
+  }
+}
+
+/// GSSAPI token message (RFC 4462 Section 3.3)
+class SSH_Message_Userauth_GSSAPI_Token implements SSHMessage {
+  /// 61
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_GSSAPI_TOKEN;
+
+  final Uint8List token;
+
+  SSH_Message_Userauth_GSSAPI_Token({
+    required this.token,
+  });
+
+  factory SSH_Message_Userauth_GSSAPI_Token.decode(Uint8List bytes) {
+    final reader = SSHMessageReader(bytes);
+    reader.skip(1);
+    final token = reader.readString();
+    return SSH_Message_Userauth_GSSAPI_Token(
+      token: token,
+    );
+  }
+
+  @override
+  Uint8List encode() {
+    final writer = SSHMessageWriter();
+    writer.writeUint8(messageId);
+    writer.writeString(token);
+    return writer.takeBytes();
+  }
+
+  @override
+  String toString() {
+    return "$runtimeType(token length: ${token.length})";
+  }
+}
+
+/// GSSAPI exchange complete message (RFC 4462 Section 3.4)
+class SSH_Message_Userauth_GSSAPI_ExchangeComplete implements SSHMessage {
+  /// 63
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_GSSAPI_EXCHANGE_COMPLETE;
+
+  SSH_Message_Userauth_GSSAPI_ExchangeComplete();
+
+  factory SSH_Message_Userauth_GSSAPI_ExchangeComplete.decode(Uint8List bytes) {
+    final reader = SSHMessageReader(bytes);
+    reader.skip(1);
+    return SSH_Message_Userauth_GSSAPI_ExchangeComplete();
+  }
+
+  @override
+  Uint8List encode() {
+    final writer = SSHMessageWriter();
+    writer.writeUint8(messageId);
+    return writer.takeBytes();
+  }
+
+  @override
+  String toString() {
+    return "$runtimeType()";
+  }
+}
+
+/// GSSAPI error message (RFC 4462 Section 3.5)
+class SSH_Message_Userauth_GSSAPI_Error implements SSHMessage {
+  /// 64
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_GSSAPI_ERROR;
+
+  final Uint32List majorStatus;
+  final Uint32List minorStatus;
+  final String message;
+  final String? languageTag;
+
+  SSH_Message_Userauth_GSSAPI_Error({
+    required this.majorStatus,
+    required this.minorStatus,
+    required this.message,
+    this.languageTag,
+  });
+
+  factory SSH_Message_Userauth_GSSAPI_Error.decode(Uint8List bytes) {
+    final reader = SSHMessageReader(bytes);
+    reader.skip(1);
+    final majorStatus = reader.readUint32();
+    final minorStatus = reader.readUint32();
+    final message = reader.readUtf8();
+    final languageTag = reader.readString();
+    return SSH_Message_Userauth_GSSAPI_Error(
+      majorStatus: Uint32List.fromList([majorStatus]),
+      minorStatus: Uint32List.fromList([minorStatus]),
+      message: message,
+      languageTag: languageTag.isEmpty ? null : languageTag,
+    );
+  }
+
+  @override
+  Uint8List encode() {
+    final writer = SSHMessageWriter();
+    writer.writeUint8(messageId);
+    writer.writeUint32(majorStatus[0]);
+    writer.writeUint32(minorStatus[0]);
+    writer.writeUtf8(message);
+    writer.writeUtf8(languageTag ?? '');
+    return writer.takeBytes();
+  }
+
+  @override
+  String toString() {
+    return "$runtimeType(major: $majorStatus, minor: $minorStatus, message: $message)";
+  }
+}
+
+/// GSSAPI error token message (RFC 4462 Section 3.6)
+class SSH_Message_Userauth_GSSAPI_ErrTok implements SSHMessage {
+  /// 65
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_GSSAPI_ERRTOK;
+
+  final Uint8List errorToken;
+
+  SSH_Message_Userauth_GSSAPI_ErrTok({
+    required this.errorToken,
+  });
+
+  factory SSH_Message_Userauth_GSSAPI_ErrTok.decode(Uint8List bytes) {
+    final reader = SSHMessageReader(bytes);
+    reader.skip(1);
+    final errorToken = reader.readString();
+    return SSH_Message_Userauth_GSSAPI_ErrTok(
+      errorToken: errorToken,
+    );
+  }
+
+  @override
+  Uint8List encode() {
+    final writer = SSHMessageWriter();
+    writer.writeUint8(messageId);
+    writer.writeString(errorToken);
+    return writer.takeBytes();
+  }
+
+  @override
+  String toString() {
+    return "$runtimeType(errorToken length: ${errorToken.length})";
+  }
+}
+
+/// GSSAPI MIC message (RFC 4462 Section 3.7)
+class SSH_Message_Userauth_GSSAPI_MIC implements SSHMessage {
+  /// 66
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_GSSAPI_MIC;
+
+  final Uint8List mic;
+
+  SSH_Message_Userauth_GSSAPI_MIC({
+    required this.mic,
+  });
+
+  factory SSH_Message_Userauth_GSSAPI_MIC.decode(Uint8List bytes) {
+    final reader = SSHMessageReader(bytes);
+    reader.skip(1);
+    final mic = reader.readString();
+    return SSH_Message_Userauth_GSSAPI_MIC(
+      mic: mic,
+    );
+  }
+
+  @override
+  Uint8List encode() {
+    final writer = SSHMessageWriter();
+    writer.writeUint8(messageId);
+    writer.writeString(mic);
+    return writer.takeBytes();
+  }
+
+  @override
+  String toString() {
+    return "$runtimeType(mic length: ${mic.length})";
   }
 }

@@ -120,6 +120,15 @@ class SSHClient {
   /// null to skip to the next available authentication method.
   final SSHUserInfoRequestHandler? onUserInfoRequest;
 
+  /// Set this field to enable the 'gssapi-with-mic' authentication method.
+  /// This handler is called to provide GSSAPI credentials and configuration.
+  /// Return null to skip to the next available authentication method.
+  final SSHGSSAPIRequestHandler? onGSSAPIRequest;
+
+  /// Set this field to handle GSSAPI token exchanges during authentication.
+  /// This handler is called for each token exchange round.
+  final SSHGSSAPITokenHandler? onGSSAPIToken;
+
   /// The SSH server may send banner message at any time before authentication
   /// is successful. Set this field to receive the banner message.
   final SSHUserauthBannerHandler? onUserauthBanner;
@@ -194,6 +203,8 @@ class SSHClient {
       this.onPasswordRequest,
       this.onChangePasswordRequest,
       this.onUserInfoRequest,
+      this.onGSSAPIRequest,
+      this.onGSSAPIToken,
       this.onUserauthBanner,
       this.onAuthenticated,
       this.keepAliveInterval = const Duration(seconds: 10),
@@ -732,6 +743,8 @@ class SSHClient {
         return _catch(() => _handleUserauthPasswordChangeRequest(payload));
       case SSHAuthMethod.keyboardInteractive:
         return _catch(() => _handleUserauthInfoRequest(payload));
+      case SSHAuthMethod.gssapi:
+        return _catch(() => _handleUserauthGSSAPIResponse(payload));
       default:
         printDebug?.call('unknown auth method: $_currentAuthMethod');
     }
@@ -798,6 +811,93 @@ class SSHClient {
         'Received authentication banner (${message.message.length} chars, ${sanitizedMessage.length} after sanitization)');
 
     onUserauthBanner?.call(sanitizedMessage);
+  }
+
+  Future<void> _handleUserauthGSSAPIResponse(Uint8List payload) async {
+    printDebug?.call('SSHClient._handleUserauthGSSAPIResponse');
+    
+    // Try to decode as different GSSAPI message types
+    try {
+      final message = SSH_Message_Userauth_GSSAPI_Response.decode(payload);
+      printTrace?.call('<- $socket: $message');
+      
+      // Handle GSSAPI mechanism selection response
+      if (onGSSAPIRequest != null) {
+        final credentials = await onGSSAPIRequest!(message.mechanismOids);
+        if (credentials != null) {
+          _sendGSSAPIToken(credentials, null);
+        } else {
+          _tryNextAuthMethod();
+        }
+      } else {
+        _tryNextAuthMethod();
+      }
+    } catch (e) {
+      // Try other GSSAPI message types
+      try {
+        final tokenMessage = SSH_Message_Userauth_GSSAPI_Token.decode(payload);
+        printTrace?.call('<- $socket: $tokenMessage');
+        
+        if (onGSSAPIToken != null) {
+          final responseToken = await onGSSAPIToken!(tokenMessage.token);
+          if (responseToken != null) {
+            _sendGSSAPIToken(null, responseToken);
+          } else {
+            _tryNextAuthMethod();
+          }
+        } else {
+          _tryNextAuthMethod();
+        }
+      } catch (e2) {
+        try {
+          final completeMessage = SSH_Message_Userauth_GSSAPI_ExchangeComplete.decode(payload);
+          printTrace?.call('<- $socket: $completeMessage');
+          
+          // GSSAPI exchange complete, send MIC
+          _sendGSSAPIMIC();
+        } catch (e3) {
+          try {
+            final errorMessage = SSH_Message_Userauth_GSSAPI_Error.decode(payload);
+            printTrace?.call('<- $socket: $errorMessage');
+            printDebug?.call('GSSAPI error: ${errorMessage.message}');
+            _tryNextAuthMethod();
+          } catch (e4) {
+            printDebug?.call('Unknown GSSAPI message type');
+            _tryNextAuthMethod();
+          }
+        }
+      }
+    }
+  }
+
+  void _sendGSSAPIToken(SSHGSSAPICredentials? credentials, Uint8List? token) {
+    printDebug?.call('SSHClient._sendGSSAPIToken');
+    
+    final request = SSH_Message_Userauth_Request(
+      user: username,
+      serviceName: 'ssh-connection',
+      methodName: 'gssapi-with-mic',
+      gssapiMechanismOids: credentials?.mechanismOids,
+      gssapiToken: token,
+    );
+    
+    _sendMessage(request);
+  }
+
+  void _sendGSSAPIMIC() {
+    printDebug?.call('SSHClient._sendGSSAPIMIC');
+    
+    // For now, send empty MIC - in real implementation this would be calculated
+    // based on the session key and exchange hash
+    final request = SSH_Message_Userauth_Request(
+      user: username,
+      serviceName: 'ssh-connection',
+      methodName: 'gssapi-with-mic',
+      gssapiMechanismOids: [],
+      gssapiMic: Uint8List(0),
+    );
+    
+    _sendMessage(request);
   }
 
   void _handleGlobalRequest(Uint8List payload) {
@@ -1152,6 +1252,8 @@ class SSHClient {
         return _authWithNextHostbased();
       case SSHAuthMethod.certificate:
         return _authWithNextCertificate();
+      case SSHAuthMethod.gssapi:
+        return _authWithGSSAPI();
     }
   }
 
@@ -1300,6 +1402,54 @@ class SSHClient {
     }
   }
 
+  void _authWithGSSAPI() {
+    printDebug?.call('SSHClient._authWithGSSAPI');
+    _authAttempts++;
+
+    // RFC 4462: Start GSSAPI authentication with mechanism OIDs
+    if (onGSSAPIRequest == null) {
+      printDebug?.call('GSSAPI authentication requested but no handler provided');
+      _tryNextAuthMethod();
+      return;
+    }
+
+    // Get GSSAPI credentials from the handler
+    final credentialsFuture = onGSSAPIRequest!([]);
+    if (credentialsFuture is Future<SSHGSSAPICredentials?>) {
+      credentialsFuture.then((credentials) {
+        if (credentials != null) {
+          _startGSSAPIAuthentication(credentials);
+        } else {
+          _tryNextAuthMethod();
+        }
+      }).catchError((error) {
+        printDebug?.call('GSSAPI request handler error: $error');
+        _tryNextAuthMethod();
+      });
+    } else {
+      final credentials = credentialsFuture as SSHGSSAPICredentials?;
+      if (credentials != null) {
+        _startGSSAPIAuthentication(credentials);
+      } else {
+        _tryNextAuthMethod();
+      }
+    }
+  }
+
+  void _startGSSAPIAuthentication(SSHGSSAPICredentials credentials) {
+    printDebug?.call('Starting GSSAPI authentication with mechanisms: ${credentials.mechanismOids}');
+    
+    // Send initial GSSAPI request with mechanism OIDs
+    final request = SSH_Message_Userauth_Request(
+      user: username,
+      serviceName: 'ssh-connection',
+      methodName: 'gssapi-with-mic',
+      gssapiMechanismOids: credentials.mechanismOids,
+    );
+    
+    _sendMessage(request);
+  }
+
   /// Updates the authentication method queue based on server's response
   void _updateAuthMethodsBasedOnServerResponse(List<String> serverMethods, bool partialSuccess) {
     // RFC 4252: Server tells us which methods may productively continue
@@ -1329,6 +1479,11 @@ class SSHClient {
               hostName != null &&
               userNameOnClientHost != null) {
             supportedMethods.add(SSHAuthMethod.hostbased);
+          }
+          break;
+        case 'gssapi-with-mic':
+          if (onGSSAPIRequest != null) {
+            supportedMethods.add(SSHAuthMethod.gssapi);
           }
           break;
         case 'none':
