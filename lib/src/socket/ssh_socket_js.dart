@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dartssh2/src/socket/ssh_socket.dart';
 
 Future<SSHSocket> connectNativeSocket(

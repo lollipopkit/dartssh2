@@ -20,6 +20,7 @@ import 'package:dartssh2/src/ssh_key_pair.dart';
 import 'package:dartssh2/src/ssh_algorithm.dart';
 import 'package:dartssh2/src/ssh_session.dart';
 import 'package:dartssh2/src/http/http_client.dart';
+import 'package:dartssh2/src/security/ssh_dos_protection.dart';
 
 /// Type definition for the host keys handler.
 typedef SSHHostKeysHandler = void Function(List<SSHHostKey> hostKeys);
@@ -155,6 +156,14 @@ class SSHClient {
   /// for all sessions.
   final bool enableAgentForwarding;
 
+  /// Enable advanced DoS protection. When true, connection rate limiting,
+  /// authentication rate limiting, and resource monitoring will be enforced.
+  final bool enableDoSProtection;
+
+  /// Custom DoS protection instance. If null and enableDoSProtection is true,
+  /// a default instance will be created.
+  final SSHDoSProtection? dosProtection;
+
   /// A [Future] that completes when the transport is closed, or when an error
   /// occurs. After this [Future] completes, [isClosed] will be true and no more
   /// data can be sent or received.
@@ -186,7 +195,9 @@ class SSHClient {
       /// Maximum authentication attempts. RFC 4252 recommends 20 attempts.
       this.maxAuthAttempts = defaultMaxAuthAttempts,
       this.onHostKeys,
-      this.enableAgentForwarding = false}) {
+      this.enableAgentForwarding = false,
+      this.enableDoSProtection = false,
+      this.dosProtection}) {
     _transport = SSHTransport(
       socket,
       isServer: false,
@@ -218,11 +229,29 @@ class SSHClient {
 
     // 添加认证超时定时器
     _authTimeoutTimer = Timer(authTimeout, _onAuthTimeout);
+
+    // Initialize DoS protection
+    if (enableDoSProtection) {
+      _dosProtection = dosProtection ?? SSHDoSProtection();
+      _connectionId = 'ssh_${socket.remoteAddress ?? 'unknown'}_${socket.remotePort ?? 0}_${DateTime.now().millisecondsSinceEpoch}';
+      
+      // Check if connection is allowed
+      _dosProtection!.allowConnection(
+        socket.remoteAddress,
+        connectionId: _connectionId,
+      );
+    }
   }
 
   final _hostbasedKeyPairsLeft = Queue<SSHKeyPair>();
   Timer? _authTimeoutTimer;
   int _authAttempts = 0;
+  
+  /// DoS protection instance
+  SSHDoSProtection? _dosProtection;
+  
+  /// Unique connection identifier for DoS tracking
+  String? _connectionId;
 
   late final SSHTransport _transport;
 
@@ -526,7 +555,18 @@ class SSHClient {
   void close() {
     _authTimeoutTimer?.cancel();
     _closeChannels();
+    
+    // Clean up DoS protection
+    if (_dosProtection != null && _connectionId != null) {
+      _dosProtection!.removeConnection(socket.remoteAddress, _connectionId!);
+    }
+    
     _transport.close();
+  }
+
+  /// Get DoS protection statistics if enabled
+  Map<String, dynamic>? getDoSStatistics() {
+    return _dosProtection?.getStatistics();
   }
 
   /// Close all channels that are currently open.
@@ -801,6 +841,8 @@ class SSHClient {
     switch (message.channelType) {
       case 'forwarded-tcpip':
         return _handleForwardedTcpipChannelOpen(message);
+      case 'x11':
+        return _handleX11ChannelOpen(message);
     }
 
     printDebug?.call('unknown channelType: ${message.channelType}');
@@ -861,7 +903,43 @@ class SSHClient {
     );
 
     remoteForward._connections.add(
-      SSHForwardChannel(channelController.channel),
+      SSHForwardChannel(
+        channelController.channel,
+        originatorIP: message.originatorIP,
+        originatorPort: message.originatorPort,
+      ),
+    );
+  }
+
+  void _handleX11ChannelOpen(SSH_Message_Channel_Open message) {
+    printDebug?.call('SSHClient._handleX11ChannelOpen');
+
+    // For now, accept X11 forwarding requests but log them
+    // This provides compatibility with servers that request X11 forwarding
+    printDebug?.call('X11 forwarding request from ${message.originatorIP}:${message.originatorPort}');
+
+    final localChannelId = _channelIdAllocator.allocate();
+
+    final confirmation = SSH_Message_Channel_Confirmation(
+      recipientChannel: message.senderChannel,
+      senderChannel: localChannelId,
+      initialWindowSize: _initialWindowSize,
+      maximumPacketSize: _maximumPacketSize,
+      data: Uint8List(0),
+    );
+
+    _sendMessage(confirmation);
+
+    // TODO: Add X11 connection handling when X11 forwarding is implemented
+    // For now, just log the connection with originator information
+    printDebug?.call('X11 channel opened from ${message.originatorIP}:${message.originatorPort}');
+    
+    // Accept the channel but don't create a controller since we're not handling X11 yet
+    _acceptChannel(
+      localChannelId: localChannelId,
+      remoteChannelId: message.senderChannel,
+      remoteInitialWindowSize: message.initialWindowSize,
+      remoteMaximumPacketSize: message.maximumPacketSize,
     );
   }
 
@@ -992,6 +1070,19 @@ class SSHClient {
       );
       close();
       return;
+    }
+
+    // Check DoS protection for authentication attempts
+    if (_dosProtection != null && _connectionId != null) {
+      try {
+        _dosProtection!.allowAuthentication(socket.remoteAddress);
+      } catch (e) {
+        _authenticated.completeError(
+          SSHAuthAbortError('DoS protection: ${e.toString()}'),
+        );
+        close();
+        return;
+      }
     }
 
     if (_currentAuthMethod == SSHAuthMethod.publicKey) {

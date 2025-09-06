@@ -6,8 +6,15 @@ import 'package:dartssh2/src/ssh_channel.dart';
 
 class SSHForwardChannel implements SSHSocket {
   final SSHChannel _channel;
+  final String? _originatorIP;
+  final int? _originatorPort;
 
-  SSHForwardChannel(this._channel) {
+  SSHForwardChannel(
+    this._channel, {
+    String? originatorIP,
+    int? originatorPort,
+  })  : _originatorIP = originatorIP,
+        _originatorPort = originatorPort {
     _sinkController.stream
         .map((data) => data is Uint8List ? data : Uint8List.fromList(data))
         .map((data) => SSHChannelData(data))
@@ -38,13 +45,26 @@ class SSHForwardChannel implements SSHSocket {
   void destroy() {
     _channel.destroy();
   }
+
+  @override
+  String? get remoteAddress => _originatorIP;
+  
+  @override
+  int? get remotePort => _originatorPort;
 }
 
 /// X11 forwarding channel that handles X11 connections from the remote server
 class SSHX11Channel implements SSHSocket {
   final SSHChannel _channel;
+  final String? _originatorAddress;
+  final int? _originatorPort;
 
-  SSHX11Channel(this._channel) {
+  SSHX11Channel(
+    this._channel, {
+    String? originatorAddress,
+    int? originatorPort,
+  })  : _originatorAddress = originatorAddress,
+        _originatorPort = originatorPort {
     _sinkController.stream
         .map((data) => data is Uint8List ? data : Uint8List.fromList(data))
         .map((data) => SSHChannelData(data))
@@ -75,4 +95,10 @@ class SSHX11Channel implements SSHSocket {
   void destroy() {
     _channel.destroy();
   }
+
+  @override
+  String? get remoteAddress => _originatorAddress;
+  
+  @override
+  int? get remotePort => _originatorPort;
 }

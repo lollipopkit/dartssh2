@@ -38,6 +38,12 @@ class _SSHNativeSocket implements SSHSocket {
   }
 
   @override
+  String? get remoteAddress => _socket.remoteAddress.host;
+
+  @override
+  int? get remotePort => _socket.remotePort;
+
+  @override
   String toString() {
     final address = '${_socket.remoteAddress.host}:${_socket.remotePort}';
     return '_SSHNativeSocket($address)';
