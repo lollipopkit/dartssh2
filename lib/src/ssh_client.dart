@@ -14,6 +14,7 @@ import 'package:dartssh2/src/ssh_hostkey.dart'; // Added import
 import 'package:dartssh2/src/message/base.dart';
 import 'package:dartssh2/src/ssh_transport.dart';
 import 'package:dartssh2/src/ssh_userauth.dart';
+import 'package:dartssh2/src/ssh_auth_policy.dart';
 import 'package:dartssh2/src/socket/ssh_socket.dart';
 import 'package:dartssh2/src/ssh_keepalive.dart';
 import 'package:dartssh2/src/ssh_key_pair.dart';
@@ -123,6 +124,10 @@ class SSHClient {
   /// is successful. Set this field to receive the banner message.
   final SSHUserauthBannerHandler? onUserauthBanner;
 
+  /// Authentication policy configuration for controlling method prioritization
+  /// and security requirements. If null, uses default behavior.
+  final SSHAuthPolicy? authPolicy;
+
   /// A [Future] that completes normally when the client is connected to the
   // Future<void> get handshake => _handshakeCompleter.future;
 
@@ -197,7 +202,8 @@ class SSHClient {
       this.onHostKeys,
       this.enableAgentForwarding = false,
       this.enableDoSProtection = false,
-      this.dosProtection}) {
+      this.dosProtection,
+      this.authPolicy}) {
     _transport = SSHTransport(
       socket,
       isServer: false,
@@ -1030,11 +1036,14 @@ class SSHClient {
 
     printDebug?.call('Transport confidentiality: $hasConfidentiality, MAC: $hasMac');
 
+    // Initialize available authentication methods based on policy and configuration
+    final availableMethods = <SSHAuthMethod>[];
+
     // RFC 4252: First try "none" method to get list of supported methods
-    _authMethodsLeft.add(SSHAuthMethod.none);
+    availableMethods.add(SSHAuthMethod.none);
 
     if (identities != null && identities!.isNotEmpty) {
-      _authMethodsLeft.add(SSHAuthMethod.publicKey);
+      availableMethods.add(SSHAuthMethod.publicKey);
     }
 
     // RFC 4252: Password authentication should be disabled if no confidentiality
@@ -1043,19 +1052,29 @@ class SSHClient {
         printDebug
             ?.call('WARNING: Password authentication disabled - no transport confidentiality (RFC 4252)');
       } else {
-        _authMethodsLeft.add(SSHAuthMethod.password);
+        availableMethods.add(SSHAuthMethod.password);
       }
     }
 
     if (onUserInfoRequest != null) {
-      _authMethodsLeft.add(SSHAuthMethod.keyboardInteractive);
+      availableMethods.add(SSHAuthMethod.keyboardInteractive);
     }
 
     if (hostbasedIdentities != null &&
         hostbasedIdentities!.isNotEmpty &&
         hostName != null &&
         userNameOnClientHost != null) {
-      _authMethodsLeft.add(SSHAuthMethod.hostbased);
+      availableMethods.add(SSHAuthMethod.hostbased);
+    }
+
+    // Apply authentication policy if specified
+    if (authPolicy != null) {
+      final sortedMethods = authPolicy!.sortMethods(availableMethods);
+      _authMethodsLeft.addAll(sortedMethods);
+      printDebug?.call('Applied authentication policy. Method order: ${sortedMethods.map((m) => m.name).join(', ')}');
+    } else {
+      // Default behavior: maintain existing order for backward compatibility
+      _authMethodsLeft.addAll(availableMethods);
     }
 
     _tryNextAuthMethod();
@@ -1279,8 +1298,17 @@ class SSHClient {
     }
 
     // Update our method queue to only include server-supported methods
-    _authMethodsLeft.clear();
-    _authMethodsLeft.addAll(supportedMethods);
+    if (authPolicy != null) {
+      // Apply authentication policy to server-supported methods
+      final sortedMethods = authPolicy!.sortMethods(supportedMethods);
+      _authMethodsLeft.clear();
+      _authMethodsLeft.addAll(sortedMethods);
+      printDebug?.call('Applied authentication policy to server response. Method order: ${sortedMethods.map((m) => m.name).join(', ')}');
+    } else {
+      // Default behavior: maintain server's suggested order
+      _authMethodsLeft.clear();
+      _authMethodsLeft.addAll(supportedMethods);
+    }
 
     if (partialSuccess) {
       printDebug?.call('Partial authentication success - continuing with additional methods');
