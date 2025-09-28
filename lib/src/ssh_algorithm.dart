@@ -87,39 +87,45 @@ class SSHAlgorithms {
   final List<SSHMacType> mac;
 
   const SSHAlgorithms({
+    // Prefer modern KEX first; move legacy SHA-1/group1 variants to the end
+    // as fallback-only to improve security defaults.
     this.kex = const [
       SSHKexType.x25519,
       SSHKexType.nistp521,
       SSHKexType.nistp384,
       SSHKexType.nistp256,
-      SSHKexType.dhGexSha256,
       SSHKexType.dh16Sha512,
       SSHKexType.dh14Sha256,
+      SSHKexType.dhGexSha256,
+      // Legacy fallbacks (SHA-1/group1)
       SSHKexType.dh14Sha1,
       SSHKexType.dhGexSha1,
       SSHKexType.dh1Sha1,
     ],
     this.hostkey = const [
       SSHHostkeyType.ed25519,
-      SSHHostkeyType.rsaSha512,
-      SSHHostkeyType.rsaSha256,
-      SSHHostkeyType.rsaSha1,
       SSHHostkeyType.ecdsa521,
       SSHHostkeyType.ecdsa384,
       SSHHostkeyType.ecdsa256,
+      SSHHostkeyType.rsaSha512,
+      SSHHostkeyType.rsaSha256,
+      // Legacy fallback
+      SSHHostkeyType.rsaSha1,
     ],
 
-    /// Keep this sequence for safety.
+    /// Prefer CTR modes; keep CBC last for legacy servers only.
     this.cipher = const [
       SSHCipherType.aes256ctr,
       SSHCipherType.aes128ctr,
+      // Legacy fallbacks (CBC) susceptible to padding oracle issues
       SSHCipherType.aes256cbc,
       SSHCipherType.aes128cbc,
     ],
+    // Prefer modern SHA-2 MACs by default; keep SHA-1 as fallback and MD5 last.
     this.mac = const [
-      SSHMacType.hmacSha1,
-      SSHMacType.hmacSha256,
       SSHMacType.hmacSha512,
+      SSHMacType.hmacSha256,
+      SSHMacType.hmacSha1,
       SSHMacType.hmacMd5,
     ],
   });

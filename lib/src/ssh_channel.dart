@@ -248,7 +248,13 @@ class SSHChannelController {
 
     _localWindow -= data.length;
     if (_localWindow < 0) {
-      // Maybe we should close the channel here?
+      // Log and recover by issuing a window adjust; negative indicates protocol
+      // mismatch or delay in flow control from the remote. We prefer recovery
+      // to hard-closing for better interoperability.
+      printDebug?.call(
+        'SSHChannel._handleDataMessage: local window underflow '
+        '(localWindow=$_localWindow); recovering with WINDOW_ADJUST',
+      );
     }
 
     _sendWindowAdjustIfNeeded();

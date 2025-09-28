@@ -78,6 +78,10 @@ class SSHClient {
   /// RFC 4252 recommended authentication timeout period
   static const Duration defaultAuthTimeout = Duration(minutes: 10);
 
+  /// Default handshake timeout. Separates transport handshake timeout from
+  /// authentication timeout for better robustness.
+  static const Duration defaultHandshakeTimeout = Duration(seconds: 30);
+
   /// RFC 4252 recommended maximum authentication attempts per session
   static const int defaultMaxAuthAttempts = 20;
 
@@ -144,6 +148,11 @@ class SSHClient {
   /// Auth timeout, 10m by default.
   final Duration authTimeout;
 
+  /// Handshake timeout, 30s by default. This only covers the SSH transport
+  /// handshake (version exchange, KEX, host key verification, NEWKEYS), and is
+  /// independent from [authTimeout].
+  final Duration handshakeTimeout;
+
   /// Max auth attempts, 20 by default.
   final int maxAuthAttempts;
 
@@ -179,6 +188,9 @@ class SSHClient {
       /// Authentication timeout period. RFC 4252 recommends 10 minutes.
       this.authTimeout = defaultAuthTimeout,
 
+      /// Handshake timeout period. Defaults to 30s.
+      this.handshakeTimeout = defaultHandshakeTimeout,
+
       /// Maximum authentication attempts. RFC 4252 recommends 20 attempts.
       this.maxAuthAttempts = defaultMaxAuthAttempts,
       this.onHostKeys}) {
@@ -213,10 +225,14 @@ class SSHClient {
 
     // 添加认证超时定时器
     _authTimeoutTimer = Timer(authTimeout, _onAuthTimeout);
+
+    // 添加握手超时定时器（与认证超时分离）
+    _handshakeTimeoutTimer = Timer(handshakeTimeout, _onHandshakeTimeout);
   }
 
   final _hostbasedKeyPairsLeft = Queue<SSHKeyPair>();
   Timer? _authTimeoutTimer;
+  Timer? _handshakeTimeoutTimer;
   int _authAttempts = 0;
 
   late final SSHTransport _transport;
@@ -490,6 +506,7 @@ class SSHClient {
   /// closed immediately.
   void close() {
     _authTimeoutTimer?.cancel();
+    _handshakeTimeoutTimer?.cancel();
     _closeChannels();
     _transport.close();
   }
@@ -506,11 +523,16 @@ class SSHClient {
 
   void _handleTransportReady() {
     printDebug?.call('SSHClient._onTransportReady');
+    // 握手完成，取消握手超时定时器
+    _handshakeTimeoutTimer?.cancel();
+    _handshakeTimeoutTimer = null;
     _requestAuthentication();
   }
 
   void _handleTransportClosed() {
     printDebug?.call('SSHClient._onTransportClosed');
+    _handshakeTimeoutTimer?.cancel();
+    _handshakeTimeoutTimer = null;
     if (!_authenticated.isCompleted) {
       final currentMethod =
           _currentAuthMethod != null ? "Current method: ${_currentAuthMethod!.name}" : "No auth method tried";
@@ -522,6 +544,16 @@ class SSHClient {
     }
     _keepAlive?.stop();
     _closeChannels();
+  }
+
+  void _onHandshakeTimeout() {
+    // 若在握手阶段一直未就绪，则返回握手超时错误并关闭连接
+    if (_authenticated.isCompleted) return;
+    final msg = 'Handshake timed out after ${handshakeTimeout.inSeconds} seconds.';
+    _authenticated.completeError(SSHHandshakeError(msg));
+    // 认证阶段不会开始，取消其定时器以避免误触发
+    _authTimeoutTimer?.cancel();
+    _transport.closeWithError(SSHHandshakeError(msg));
   }
 
   void _handlePacket(Uint8List payload) {

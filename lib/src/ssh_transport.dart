@@ -26,8 +26,9 @@ import '../dartssh2.dart';
 typedef SSHPrintHandler = void Function(String?);
 
 /// Function called when host key is received.
-/// [type] is the type of the host key, For example 'ssh-rsa',
-/// [fingerprint] md5 fingerprint of the host key.
+/// [type] is the type of the host key, for example 'ssh-rsa'.
+/// [fingerprint] is the MD5 fingerprint of the host key. The SHA256
+/// fingerprint is also logged via [printDebug] for user visibility.
 typedef SSHHostkeyVerifyHandler = FutureOr<bool> Function(
   String type,
   Uint8List fingerprint,
@@ -965,7 +966,9 @@ class SSHTransport {
     _sessionId ??= exchangeHash;
     _sharedSecret = sharedSecret;
 
+    // Compute MD5 and SHA256 fingerprints of the received host key.
     final fingerprint = MD5Digest().process(hostkey);
+    final fingerprintSha256 = SHA256Digest().process(hostkey);
 
     if (_hostkeyVerified) {
       _sendNewKeys();
@@ -974,9 +977,12 @@ class SSHTransport {
     }
 
     final fingerprintHex = fingerprint.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':');
+    final fingerprintSha256Base64 = base64.encode(fingerprintSha256).replaceAll('=', '');
 
     // RFC 4251 Section 4.1: Implementations SHOULD try to make best effort to check host keys
-    printDebug?.call('Server host key fingerprint: $fingerprintHex (${_hostkeyType?.name})');
+    // Log both modern SHA256 (base64) and legacy MD5 (hex with colons) fingerprints.
+    printDebug?.call(
+        'Server host key fingerprint: SHA256:$fingerprintSha256Base64 (MD5:$fingerprintHex) (${_hostkeyType?.name})');
     printDebug?.call('WARNING: This is the first time connecting to this host. '
         'Verify the fingerprint through external means before accepting.');
 

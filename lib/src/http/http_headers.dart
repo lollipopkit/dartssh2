@@ -92,7 +92,8 @@ abstract class SSHHttpHeaders {
   static const cookieHeader = "cookie";
   static const setCookieHeader = "set-cookie";
 
-  // !TODO(39783): Document this.
+  // General headers as defined by HTTP/1.1. These apply to both
+  // requests and responses (RFC 7230/7231; formerly RFC 2616).
   static const generalHeaders = [
     cacheControlHeader,
     connectionHeader,

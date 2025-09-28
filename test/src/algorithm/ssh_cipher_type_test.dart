@@ -53,9 +53,9 @@ void main() {
           SSHKexType.nistp521,
           SSHKexType.nistp384,
           SSHKexType.nistp256,
-          SSHKexType.dhGexSha256,
           SSHKexType.dh16Sha512,
           SSHKexType.dh14Sha256,
+          SSHKexType.dhGexSha256,
           SSHKexType.dh14Sha1,
           SSHKexType.dhGexSha1,
           SSHKexType.dh1Sha1,
@@ -65,12 +65,12 @@ void main() {
         algorithms.hostkey,
         equals([
           SSHHostkeyType.ed25519,
-          SSHHostkeyType.rsaSha512,
-          SSHHostkeyType.rsaSha256,
-          SSHHostkeyType.rsaSha1,
           SSHHostkeyType.ecdsa521,
           SSHHostkeyType.ecdsa384,
           SSHHostkeyType.ecdsa256,
+          SSHHostkeyType.rsaSha512,
+          SSHHostkeyType.rsaSha256,
+          SSHHostkeyType.rsaSha1,
         ]));
 
     expect(
@@ -85,9 +85,9 @@ void main() {
     expect(
         algorithms.mac,
         equals([
-          SSHMacType.hmacSha1,
-          SSHMacType.hmacSha256,
           SSHMacType.hmacSha512,
+          SSHMacType.hmacSha256,
+          SSHMacType.hmacSha1,
           SSHMacType.hmacMd5,
         ]));
   });
