@@ -565,9 +565,12 @@ class SftpFile {
     int? length,
     int offset = 0,
     void Function(int bytesRead)? onProgress,
+    int? chunkSize,
+    int? maxBytesOnTheWire,
   }) async* {
-    const chunkSize = 16 * 1024;
-    const maxBytesOnTheWire = chunkSize * 64;
+    // Defaults for read pipeline
+    final int chunkSize_ = chunkSize ?? 16 * 1024;
+    final int maxBytesOnTheWire_ = maxBytesOnTheWire ?? chunkSize_ * 64;
 
     // Get the file size if not specified.
     if (length == null) {
@@ -593,7 +596,7 @@ class SftpFile {
     var bytessRequested = 0;
 
     Future<void> readChunk(int chunkStart) async {
-      final chunkEnd = min(chunkStart + chunkSize, offset + length!);
+      final chunkEnd = min(chunkStart + chunkSize_, offset + length!);
       final chunkLength = chunkEnd - chunkStart;
 
       bytessRequested += chunkLength;
@@ -633,7 +636,7 @@ class SftpFile {
 
       while (bytessRequested < length!) {
         final bytesOnTheWire = bytessRequested - bytessRecieved;
-        if (bytesOnTheWire >= maxBytesOnTheWire) return;
+        if (bytesOnTheWire >= maxBytesOnTheWire_) return;
         readChunk(bytessRequested + offset).then((_) => scheduleRead());
       }
     }
@@ -663,13 +666,28 @@ class SftpFile {
     Stream<Uint8List> stream, {
     int offset = 0,
     void Function(int total)? onProgress,
+    int chunkSize = defaultChunkSize,
+    int maxBytesOnTheWire = defaultMaxBytesOnTheWire,
   }) {
-    return SftpFileWriter(this, stream, offset, onProgress);
+    return SftpFileWriter(
+      this,
+      stream,
+      offset,
+      onProgress,
+      chunkSize: chunkSize,
+      maxBytesOnTheWire: maxBytesOnTheWire,
+    );
   }
 
   /// Writes [data] to the file starting at [offset].
-  Future<void> writeBytes(Uint8List data, {int offset = 0}) async {
-    const maxChunkSize = 16 * 1024;
+  Future<void> writeBytes(
+    Uint8List data, {
+    int offset = 0,
+    int? chunkSize,
+    int? maxPendingWrites,
+  }) async {
+    final int maxChunkSize = chunkSize ?? 16 * 1024;
+    final int? concurrency = maxPendingWrites;
     var bytesSent = 0;
     final futures = <Future<void>>[];
     while (bytesSent < data.length) {
@@ -678,6 +696,11 @@ class SftpFile {
       final chunkEnd = chunkBegin + chunkSize;
       final chunk = Uint8List.sublistView(data, chunkBegin, chunkEnd);
       futures.add(_writeChunk(chunk, offset: offset + bytesSent));
+      if (concurrency != null && futures.length >= concurrency) {
+        // Wait for one pending write to complete to cap concurrency.
+        await futures.first;
+        futures.removeAt(0);
+      }
       bytesSent += chunkSize;
     }
     await Future.wait(futures);

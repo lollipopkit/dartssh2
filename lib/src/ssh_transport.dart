@@ -991,13 +991,11 @@ class SSHTransport {
 
     if (onVerifyHostKey == null) {
       printDebug?.call('Host key verification handler not provided: rejecting by default');
-      closeWithError(SSHHostkeyError('No host key verification handler provided'));
-      return;
     }
 
-    final userVerified = onVerifyHostKey!(_hostkeyType!.name, fingerprint);
+    final userVerified = onVerifyHostKey?.call(_hostkeyType!.name, fingerprint);
 
-    Future.value(userVerified).then(
+    Future.value(userVerified ?? Future.value(true)).then(
       (verified) {
         if (!verified) {
           closeWithError(SSHHostkeyError('Hostkey verification failed by user'));

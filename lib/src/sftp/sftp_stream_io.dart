@@ -4,15 +4,19 @@ import 'dart:typed_data';
 import 'package:dartssh2/src/sftp/sftp_client.dart';
 import 'package:dartssh2/src/utils/stream.dart';
 
-/// The amount of data to send in a single SFTP packet.
+/// The default amount of data to send in a single SFTP packet.
 ///
 /// From the SFTP spec it's safe to send up to 32KB of data in a single packet.
 /// To strike a balance between capability and performance, we choose 16KB.
-const chunkSize = 16 * 1024;
+const defaultChunkSize = 16 * 1024;
+@Deprecated('Use defaultChunkSize')
+const chunkSize = defaultChunkSize;
 
-/// The maximum amount of data that can be sent to the remote host without
-/// receiving an acknowledgement.
-const maxBytesOnTheWire = chunkSize * 64;
+/// The default maximum amount of data that can be sent to the remote host
+/// without receiving an acknowledgement.
+const defaultMaxBytesOnTheWire = defaultChunkSize * 64;
+@Deprecated('Use defaultMaxBytesOnTheWire')
+const maxBytesOnTheWire = defaultMaxBytesOnTheWire;
 
 /// Holds the state of a streaming write operation from [stream] to [file].
 class SftpFileWriter with DoneFuture {
@@ -28,11 +32,34 @@ class SftpFileWriter with DoneFuture {
   /// Called when [bytes] of data have been successfully written to [file].
   final Function(int bytes)? onProgress;
 
+  /// Maximum chunk size for individual write requests. Defaults to
+  /// [defaultChunkSize]. Must be positive.
+  final int _chunkSize;
+
+  /// Maximum unacknowledged bytes allowed in-flight before pausing the input
+  /// stream. Defaults to [defaultMaxBytesOnTheWire]. Must be positive.
+  final int _maxBytesOnTheWire;
+
   /// Creates a new [SftpFileWriter]. The upload process is started immediately
   /// after construction.
-  SftpFileWriter(this.file, this.stream, this.offset, this.onProgress) {
+  ///
+  /// [chunkSize] controls the maximum size of a single SFTP write packet.
+  /// [maxBytesOnTheWire] caps the number of in-flight (unacknowledged) bytes
+  /// before pausing the source [stream].
+  SftpFileWriter(
+    this.file,
+    this.stream,
+    this.offset,
+    this.onProgress, {
+    int chunkSize = defaultChunkSize,
+    int maxBytesOnTheWire = defaultMaxBytesOnTheWire,
+  })  : _chunkSize = chunkSize,
+        _maxBytesOnTheWire = maxBytesOnTheWire {
+    assert(_chunkSize > 0, 'chunkSize must be positive');
+    assert(_maxBytesOnTheWire > 0, 'maxBytesOnTheWire must be positive');
+
     _subscription =
-        stream.transform(MaxChunkSize(chunkSize)).listen(_handleLocalData);
+        stream.transform(MaxChunkSize(_chunkSize)).listen(_handleLocalData);
 
     _subscription.onDone(_handleLocalDone);
   }
@@ -100,7 +127,7 @@ class SftpFileWriter with DoneFuture {
   /// and completes the operation if done.
   Future<void> _handleLocalData(Uint8List chunk) async {
     try {
-      if (_bytesOnTheWire >= maxBytesOnTheWire) {
+      if (_bytesOnTheWire >= _maxBytesOnTheWire) {
         _subscription.pause();
       }
 
@@ -123,7 +150,7 @@ class SftpFileWriter with DoneFuture {
       _bytesAcked += chunk.length;
       onProgress?.call(_bytesAcked);
 
-      if (_bytesOnTheWire < maxBytesOnTheWire) {
+      if (_bytesOnTheWire < _maxBytesOnTheWire) {
         _subscription.resume();
       }
 
