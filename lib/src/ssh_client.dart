@@ -100,8 +100,10 @@ class SSHClient {
   final SSHAlgorithms algorithms;
 
   /// Function called when the first host key is received. Return true to accept
-  /// the host key, false to reject it and close the connection. If this is
-  /// null, the host key is accepted automatically.
+  /// the host key, false to reject it and close the connection.
+  ///
+  /// Security note: This is required for safety. If not provided, the
+  /// connection will be rejected by default at host key verification time.
   final SSHHostkeyVerifyHandler? onVerifyHostKey;
 
   /// List of key pairs to use for authentication. Set this field to enable

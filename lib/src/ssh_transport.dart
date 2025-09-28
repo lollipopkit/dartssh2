@@ -61,6 +61,10 @@ class SSHTransport {
 
   /// Function called when the hostkey has been received. Returns true if the
   /// hostkey is valid, false to reject key and disconnect.
+  ///
+  /// Security note: This callback is required for clients. If null, the
+  /// transport rejects the connection by default rather than implicitly
+  /// trusting the host key.
   final SSHHostkeyVerifyHandler? onVerifyHostKey;
 
   /// Function called when the transport is ready to send data.
@@ -983,10 +987,15 @@ class SSHTransport {
     // Log both modern SHA256 (base64) and legacy MD5 (hex with colons) fingerprints.
     printDebug?.call(
         'Server host key fingerprint: SHA256:$fingerprintSha256Base64 (MD5:$fingerprintHex) (${_hostkeyType?.name})');
-    printDebug?.call('WARNING: This is the first time connecting to this host. '
-        'Verify the fingerprint through external means before accepting.');
+    printDebug?.call('WARNING: Verify the server host key fingerprint via a trusted channel before accepting.');
 
-    final userVerified = onVerifyHostKey != null ? onVerifyHostKey!(_hostkeyType!.name, fingerprint) : true;
+    if (onVerifyHostKey == null) {
+      printDebug?.call('Host key verification handler not provided: rejecting by default');
+      closeWithError(SSHHostkeyError('No host key verification handler provided'));
+      return;
+    }
+
+    final userVerified = onVerifyHostKey!(_hostkeyType!.name, fingerprint);
 
     Future.value(userVerified).then(
       (verified) {
