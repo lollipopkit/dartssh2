@@ -550,6 +550,8 @@ abstract class SSHChannelRequestType {
 class SSH_Message_Channel_Request implements SSHMessage {
   static const messageId = 98;
 
+  static final RegExp _hexPattern = RegExp(r'^[0-9a-fA-F]+$');
+
   final int recipientChannel;
   final String requestType;
   final bool wantReply;
@@ -566,7 +568,10 @@ class SSH_Message_Channel_Request implements SSHMessage {
   final bool? singleConnection;
   final String? x11AuthenticationProtocol;
   final String? x11AuthenticationCookie;
-  final String? x11ScreenNumber;
+  final int? x11ScreenNumber;
+
+  /// "xon-xoff" request specific data
+  final bool? clientCanDo;
 
   /// "env" request specific data
   final String? variableName;
@@ -587,8 +592,8 @@ class SSH_Message_Channel_Request implements SSHMessage {
   /// "exit-signal" request specific data
   final String? exitSignalName;
   final bool? coreDumped;
-  final String? errorMessage;
-  final String? languageTag;
+  final String errorMessage;
+  final String languageTag;
 
   SSH_Message_Channel_Request({
     required this.recipientChannel,
@@ -604,6 +609,7 @@ class SSH_Message_Channel_Request implements SSHMessage {
     this.x11AuthenticationProtocol,
     this.x11AuthenticationCookie,
     this.x11ScreenNumber,
+    this.clientCanDo,
     this.variableName,
     this.variableValue,
     this.command,
@@ -612,8 +618,8 @@ class SSH_Message_Channel_Request implements SSHMessage {
     this.exitStatus,
     this.exitSignalName,
     this.coreDumped,
-    this.errorMessage,
-    this.languageTag,
+    this.errorMessage = '',
+    this.languageTag = '',
   });
 
   /// Request a pseudo-terminal to be allocated for the session
@@ -647,8 +653,9 @@ class SSH_Message_Channel_Request implements SSHMessage {
     bool singleConnection = false,
     required String x11AuthenticationProtocol,
     required String x11AuthenticationCookie,
-    required String x11ScreenNumber,
+    required int x11ScreenNumber,
   }) {
+    _validateX11Cookie(x11AuthenticationCookie, isDecode: false);
     return SSH_Message_Channel_Request(
       recipientChannel: recipientChannel,
       requestType: SSHChannelRequestType.x11,
@@ -748,6 +755,19 @@ class SSH_Message_Channel_Request implements SSHMessage {
     );
   }
 
+  /// Inform the other side whether the client can manage flow control locally
+  factory SSH_Message_Channel_Request.xonXoff({
+    required int recipientChannel,
+    bool clientCanDo = false,
+  }) {
+    return SSH_Message_Channel_Request(
+      recipientChannel: recipientChannel,
+      requestType: SSHChannelRequestType.xon,
+      wantReply: false,
+      clientCanDo: clientCanDo,
+    );
+  }
+
   /// Return exit status of the process on the other end of the channel
   factory SSH_Message_Channel_Request.exitStatus({
     required int recipientChannel,
@@ -766,8 +786,8 @@ class SSH_Message_Channel_Request implements SSHMessage {
     required int recipientChannel,
     required String exitSignalName,
     bool coreDumped = false,
-    String? errorMessage,
-    String? languageTag,
+    String errorMessage = '',
+    String languageTag = '',
   }) {
     return SSH_Message_Channel_Request(
       recipientChannel: recipientChannel,
@@ -809,7 +829,8 @@ class SSH_Message_Channel_Request implements SSHMessage {
         final singleConnection = reader.readBool();
         final x11AuthenticationProtocol = reader.readUtf8();
         final x11AuthenticationCookie = reader.readUtf8();
-        final x11ScreenNumber = reader.readUtf8();
+        final x11ScreenNumber = reader.readUint32();
+        _validateX11Cookie(x11AuthenticationCookie, isDecode: true);
         return SSH_Message_Channel_Request(
           recipientChannel: recipientChannel,
           requestType: requestType,
@@ -828,6 +849,14 @@ class SSH_Message_Channel_Request implements SSHMessage {
           wantReply: wantReply,
           variableName: variableName,
           variableValue: variableValue,
+        );
+      case SSHChannelRequestType.xon:
+        final clientCanDo = reader.readBool();
+        return SSH_Message_Channel_Request(
+          recipientChannel: recipientChannel,
+          requestType: requestType,
+          wantReply: wantReply,
+          clientCanDo: clientCanDo,
         );
       case SSHChannelRequestType.shell:
         return SSH_Message_Channel_Request.shell(
@@ -913,11 +942,14 @@ class SSH_Message_Channel_Request implements SSHMessage {
         writer.writeBool(singleConnection!);
         writer.writeUtf8(x11AuthenticationProtocol!);
         writer.writeUtf8(x11AuthenticationCookie!);
-        writer.writeUtf8(x11ScreenNumber!);
+        writer.writeUint32(x11ScreenNumber!);
         break;
       case 'env':
         writer.writeUtf8(variableName!);
         writer.writeUtf8(variableValue!);
+        break;
+      case 'xon-xoff':
+        writer.writeBool(clientCanDo!);
         break;
       case 'shell':
         break;
@@ -942,8 +974,8 @@ class SSH_Message_Channel_Request implements SSHMessage {
       case 'exit-signal':
         writer.writeUtf8(exitSignalName!);
         writer.writeBool(coreDumped!);
-        writer.writeUtf8(errorMessage!);
-        writer.writeUtf8(languageTag!);
+        writer.writeUtf8(errorMessage);
+        writer.writeUtf8(languageTag);
         break;
     }
     return writer.takeBytes();
@@ -958,6 +990,8 @@ class SSH_Message_Channel_Request implements SSHMessage {
         return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply, singleConnection: $singleConnection, x11AuthenticationProtocol: $x11AuthenticationProtocol, x11AuthenticationCookie: $x11AuthenticationCookie, x11ScreenNumber: $x11ScreenNumber)';
       case 'env':
         return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply, variableName: $variableName, variableValue: $variableValue)';
+      case 'xon-xoff':
+        return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply, clientCanDo: $clientCanDo)';
       case 'shell':
         return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply)';
       case 'exec':
@@ -974,6 +1008,33 @@ class SSH_Message_Channel_Request implements SSHMessage {
         return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply, exitSignalName: $exitSignalName, coreDumped: $coreDumped, errorMessage: $errorMessage, languageTag: $languageTag)';
       default:
         return 'SSH_Message_Channel_Request(recipientChannel: $recipientChannel, requestType: $requestType, wantReply: $wantReply)';
+    }
+  }
+
+  static void _validateX11Cookie(String cookie, {required bool isDecode}) {
+    if (cookie.isEmpty) {
+      throw (isDecode
+          ? const FormatException(
+              'X11 authentication cookie must not be empty',
+            )
+          : ArgumentError.value(cookie, 'x11AuthenticationCookie',
+              'X11 authentication cookie must not be empty'));
+    }
+    if (cookie.length.isOdd) {
+      throw (isDecode
+          ? const FormatException(
+              'X11 authentication cookie must have even length',
+            )
+          : ArgumentError.value(cookie, 'x11AuthenticationCookie',
+              'X11 authentication cookie must have even length'));
+    }
+    if (!_hexPattern.hasMatch(cookie)) {
+      throw (isDecode
+          ? FormatException(
+              'X11 authentication cookie must be hexadecimal: $cookie',
+            )
+          : ArgumentError.value(cookie, 'x11AuthenticationCookie',
+              'X11 authentication cookie must be hexadecimal'));
     }
   }
 }

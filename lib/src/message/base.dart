@@ -115,7 +115,20 @@ class SSHMessageReader {
 
   List<String> readNameList() {
     final string = utf8.decode(readString());
+    if (string.isEmpty) {
+      return const [];
+    }
     final list = string.split(',');
+    for (final name in list) {
+      if (name.isEmpty) {
+        throw FormatException('Name in name-list cannot be empty');
+      }
+      for (var i = 0; i < name.length; i++) {
+        if (name.codeUnitAt(i) > 0x7f) {
+          throw FormatException('Name in name-list must be US-ASCII: $name');
+        }
+      }
+    }
     return list;
   }
 

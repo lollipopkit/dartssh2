@@ -830,9 +830,8 @@ class SSHClient {
 
     if (remoteForward == null) {
       printDebug?.call('unknown remote forward: $message');
-      final reply = SSH_Message_Channel_Open_Failure(
+      final reply = SSHClient.buildForwardedTcpipFailure(
         recipientChannel: message.senderChannel,
-        reasonCode: SSH_Message_Channel_Open_Failure.codeUnknownChannelType,
         description: 'unknown remote forward: $message',
       );
       _sendMessage(reply);
@@ -882,6 +881,19 @@ class SSHClient {
       (forward) => forward.host == host && forward.port == port,
     );
     return result.isEmpty ? null : result.first;
+  }
+
+  @visibleForTesting
+  static SSH_Message_Channel_Open_Failure buildForwardedTcpipFailure({
+    required int recipientChannel,
+    required String description,
+  }) {
+    return SSH_Message_Channel_Open_Failure(
+      recipientChannel: recipientChannel,
+      reasonCode:
+          SSH_Message_Channel_Open_Failure.codeAdministrativelyProhibited,
+      description: description,
+    );
   }
 
   void _handleChannelConfirmation(Uint8List payload) {

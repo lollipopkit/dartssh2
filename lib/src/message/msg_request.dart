@@ -25,12 +25,11 @@ class SSH_Message_Global_Request extends SSHMessage {
 
   /// Request connections to the other side be forwarded to the local side
   factory SSH_Message_Global_Request.tcpipForward(
-    String bindAddress,
-    int bindPort,
-  ) {
+      String bindAddress, int bindPort,
+      {bool wantReply = true}) {
     return SSH_Message_Global_Request(
       requestName: 'tcpip-forward',
-      wantReply: true,
+      wantReply: wantReply,
       bindAddress: bindAddress,
       bindPort: bindPort,
     );
@@ -40,10 +39,11 @@ class SSH_Message_Global_Request extends SSHMessage {
   factory SSH_Message_Global_Request.cancelTcpipForward({
     required String bindAddress,
     required int bindPort,
+    bool wantReply = true,
   }) {
     return SSH_Message_Global_Request(
       requestName: 'cancel-tcpip-forward',
-      wantReply: true,
+      wantReply: wantReply,
       bindAddress: bindAddress,
       bindPort: bindPort,
     );

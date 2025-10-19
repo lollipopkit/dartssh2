@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/ssh_errors.dart' show SSHStateError;
+import 'package:dartssh2/src/utils/list.dart' show randomBytes;
 
 /// SSH packet sequence number wraps around to zero after every 2^32
 /// packets. According to RFC4253, this counter should never be reset,
@@ -19,6 +20,9 @@ abstract class SSHPacket {
   /// The length of the packet header, is the sum of the lengths of the
   /// length field and the padding length field.
   static const headerLength = 5;
+
+  /// Source for generating random padding bytes. Exposed for tests.
+  static Uint8List Function(int length) randomPaddingGenerator = randomBytes;
 
   /// Returns the length field of the packet. This is the number of bytes
   /// following the length field except for the MAC. [packet] can be partial.
@@ -50,7 +54,10 @@ abstract class SSHPacket {
     final result = BytesBuilder(copy: false);
     result.add(Uint8List.view(header.buffer));
     result.add(payload);
-    result.add(Uint8List(padding));
+    if (padding > 0) {
+      // RFC 4253 Section 6: Padding MUST consist of random bytes.
+      result.add(randomPaddingGenerator(padding));
+    }
     return result.takeBytes();
   }
 }

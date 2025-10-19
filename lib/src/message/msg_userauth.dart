@@ -166,6 +166,13 @@ class SSH_Message_Userauth_Request extends SSHMessage {
     required Uint8List signature,
     String serviceName = 'ssh-connection',
   }) {
+    if (!_isUsAscii(hostName)) {
+      throw ArgumentError.value(
+        hostName,
+        'hostName',
+        'Host name must be US-ASCII as required by RFC 4252 §9',
+      );
+    }
     return SSH_Message_Userauth_Request(
       serviceName: serviceName,
       user: username,
@@ -244,6 +251,11 @@ class SSH_Message_Userauth_Request extends SSHMessage {
         final hostName = reader.readUtf8();
         final userNameOnClientHost = reader.readUtf8();
         final signature = reader.readString();
+        if (!_isUsAscii(hostName)) {
+          throw const FormatException(
+            'Host name in hostbased request must be US-ASCII per RFC 4252 §9',
+          );
+        }
         return SSH_Message_Userauth_Request(
           user: user,
           serviceName: serviceName,
@@ -414,6 +426,15 @@ class SSH_Message_Userauth_Banner extends SSHMessage {
   String toString() {
     return 'SSH_Message_Userauth_Banner(message: $message, language: $language)';
   }
+}
+
+bool _isUsAscii(String value) {
+  for (var i = 0; i < value.length; i++) {
+    if (value.codeUnitAt(i) > 0x7f) {
+      return false;
+    }
+  }
+  return true;
 }
 
 class SSH_Message_Userauth_Passwd_ChangeReq extends SSHMessage {

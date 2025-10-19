@@ -151,8 +151,8 @@ class SSHSession {
         _exitSignal = SSHSessionExitSignal(
           signalName: request.exitSignalName!,
           coreDumped: request.coreDumped!,
-          errorMessage: request.errorMessage!,
-          languageTag: request.languageTag!,
+          errorMessage: request.errorMessage,
+          languageTag: request.languageTag,
         );
         return true;
     }
