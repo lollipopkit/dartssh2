@@ -1,8 +1,8 @@
 ## [2.13.0] - 2025-06-22
-- docs: Update NoPorts naming [#115]. [@XavierChanth].
-- Add parameter disableHostkeyVerification [#123]. Thanks [@alexander-irion].
+- docs: Update NoPorts naming [`#115`]. [`@XavierChanth`].
+- Add parameter disableHostkeyVerification [`#123`]. Thanks [`@alexander-irion`].
 - Add support for server-initiated re-keying [`#125`]. Thanks [`@MarBazuz`].
-- Add support for new algorithms "mac-sha2-256-96", "hmac-sha2-512-96", "hmac-sha2-256-etm@openssh.com", "hmac-sha2-512-etm@openssh.com" [#126] [#127]. Thanks [@reinbeumer].
+- Add support for new algorithms "mac-sha2-256-96", "hmac-sha2-512-96", "hmac-sha2-256-etm@openssh.com", "hmac-sha2-512-etm@openssh.com" [`#126`] [`#127`]. Thanks [`@reinbeumer`].
 
 ## [2.12.0] - 2025-02-08
 - Fixed streams and channel not closing after receiving SSH_Message_Channel_Close [#116]. [@cbenhagen].
