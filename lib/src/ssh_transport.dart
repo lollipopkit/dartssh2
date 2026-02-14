@@ -195,6 +195,16 @@ class SSHTransport {
 
   final _remotePacketSN = SSHPacketSN.fromZero();
 
+  /// Whether a key exchange is currently in progress (initial or re-key).
+  bool _kexInProgress = false;
+
+  /// Whether we have already sent our SSH_MSG_KEXINIT for the ongoing key
+  /// exchange round. This is reset when the exchange finishes.
+  bool _sentKexInit = false;
+
+  /// Packets queued during key exchange that will be sent after NEW_KEYS
+  final List<Uint8List> _rekeyPendingPackets = [];
+
   Timer? _reKeyTimer;
   final Duration _reKeyInterval;
   var _bytesSent = 0;
@@ -206,24 +216,14 @@ class SSHTransport {
       throw SSHStateError('Transport is closed');
     }
 
-    // RFC 4251: Check for sequence number wrap and force rekey
-    if (_localPacketSN.needsRekey && _encryptCipher != null) {
-      printDebug?.call('Sequence number approaching wrap, forcing rekey');
-      _sendKexInit();
+    if (_kexInProgress && !_shouldBypassRekeyBuffer(data)) {
+      _rekeyPendingPackets.add(Uint8List.fromList(data));
+      return;
     }
 
-    final ctLocal = isClient ? _clientCipherType : _serverCipherType;
-    final usingAead = ctLocal?.isAEAD ?? false;
-    final isChaCha = ctLocal?.name == 'chacha20-poly1305@openssh.com';
-    final aeadReady = isChaCha
-        ? (_localChaChaEncKey != null && _localChaChaLenKey != null)
-        : (_localAeadKey != null && _localAeadFixedNonce != null);
-    final encryptionActive = usingAead ? aeadReady : (_encryptCipher != null);
-    final packetAlign = encryptionActive
-        ? (usingAead
-            ? SSHPacket.minAlign
-            : max(SSHPacket.minAlign, _encryptCipher!.blockSize))
-        : SSHPacket.minAlign;
+    final packetAlign = _encryptCipher == null
+        ? SSHPacket.minAlign
+        : max(SSHPacket.minAlign, _encryptCipher!.blockSize);
 
     final packet = SSHPacket.pack(data, align: packetAlign);
 
@@ -235,6 +235,13 @@ class SSHTransport {
       _sendKexInit();
       _bytesSent = 0;
     }
+
+    final ctLocal = isClient ? _clientCipherType : _serverCipherType;
+    final usingAead = ctLocal?.isAEAD ?? false;
+    final isChaCha = ctLocal?.name == 'chacha20-poly1305@openssh.com';
+    final aeadReady = isChaCha
+        ? (_localChaChaEncKey != null && _localChaChaLenKey != null)
+        : (_localAeadKey != null && _localAeadFixedNonce != null);
 
     if (usingAead && aeadReady) {
       // AEAD packet format (OpenSSH-style):
@@ -1076,6 +1083,16 @@ class SSHTransport {
   void _sendKexInit() {
     printDebug?.call('SSHTransport._sendKexInit');
 
+    // Don't start a new key exchange when one is already in progress
+    if (_kexInProgress && _sentKexInit) {
+      printDebug?.call('Key exchange already in progress, ignoring');
+      return;
+    }
+
+    // Mark that a new key-exchange round has started from our side.
+    _kexInProgress = true;
+    _sentKexInit = true;
+
     final message = SSH_Message_KexInit(
       kexAlgorithms: algorithms.kex.toNameList(),
       // kexAlgorithms: ['curve25519-sha256'],
@@ -1195,6 +1212,18 @@ class SSHTransport {
 
   void _handleMessageKexInit(Uint8List payload) {
     printDebug?.call('SSHTransport._handleMessageKexInit');
+
+    // If this message initiates a new key-exchange round from the remote
+    // side, we MUST respond with our own KEXINIT (RFC 4253 §7.1).
+    if (!_kexInProgress) {
+      // Start a new exchange initiated by the peer.
+      _kexInProgress = true;
+    }
+
+    if (!_sentKexInit) {
+      // We have not sent our KEXINIT for this round yet, do it now.
+      _sendKexInit();
+    }
 
     final message = SSH_Message_KexInit.decode(payload);
     printTrace?.call('<- $socket: $message');
@@ -1439,7 +1468,20 @@ class SSHTransport {
   void _handleMessageNewKeys(Uint8List message) {
     printDebug?.call('SSHTransport._handleMessageNewKeys');
     printTrace?.call('<- $socket: SSH_Message_NewKeys');
+
     _applyRemoteKeys();
+
+    // Key exchange round finished.
+    _kexInProgress = false;
+    _sentKexInit = false;
+    _kex = null;
+
+    // Flush any pending packets
+    final pending = List<Uint8List>.from(_rekeyPendingPackets);
+    _rekeyPendingPackets.clear();
+    for (final packet in pending) {
+      sendPacket(packet);
+    }
 
     // Reset the rekey timer.
     _reKeyTimer?.cancel();
@@ -1464,7 +1506,6 @@ class SSHTransport {
 
   /// Returns true if both MACs are initialized (MAC protection is provided).
   bool get hasMacProtection {
-    // AEAD provides authentication as part of the cipher
     final usingAead = (_clientCipherType?.isAEAD == true) ||
         (_serverCipherType?.isAEAD == true);
     if (usingAead) return true;
@@ -1477,12 +1518,52 @@ class SSHTransport {
       throw StateError('AEAD fixed nonce must be at least 12 bytes');
     }
     final nonce = Uint8List(12);
-    // RFC 5647: Nonce = packet sequence number (BE) || 8-byte IV
     nonce[0] = (seq >>> 24) & 0xff;
     nonce[1] = (seq >>> 16) & 0xff;
     nonce[2] = (seq >>> 8) & 0xff;
     nonce[3] = (seq) & 0xff;
     nonce.setRange(4, 12, fixed);
     return nonce;
+  }
+
+  /// Initiates a client-side re-key operation. This can be called
+  /// by client code to refresh session keys when needed.
+  void rekey() {
+    printDebug?.call('SSHTransport.rekey');
+    if (_kexInProgress) {
+      printDebug
+          ?.call('Key exchange already in progress, ignoring rekey request');
+      return;
+    }
+    _sendKexInit();
+  }
+
+  /// Determines if a packet should bypass the rekey buffer.
+  ///
+  /// During key exchange, most packets should be buffered until the exchange
+  /// is complete. However, key exchange packets themselves and transport layer
+  /// control messages (like disconnect) need to be sent immediately.
+  ///
+  /// Per RFC 4253, the following message types bypass the buffer:
+  ///
+  /// Critical transport messages (1-4):
+  /// - 1: [SSH_Message_Disconnect]
+  /// - 2: [SSH_Message_Ignore]
+  /// - 3: [SSH_Message_Unimplemented]
+  /// - 4: [SSH_Message_Debug]
+  ///
+  /// Key exchange messages (20-49):
+  /// - 20: [SSH_Message_KexInit]
+  /// - 21: [SSH_Message_NewKeys]
+  /// - 30: [SSH_Message_KexDH_Init]/[SSH_Message_KexECDH_Init]
+  /// - 31: [SSH_Message_KexDH_Reply]/[SSH_Message_KexECDH_Reply]/[SSH_Message_KexDH_GexGroup]
+  /// - 32: [SSH_Message_KexDH_GexInit]
+  /// - 33: [SSH_Message_KexDH_GexReply]
+  /// - 34: [SSH_Message_KexDH_GexRequest]
+  bool _shouldBypassRekeyBuffer(Uint8List data) {
+    if (data.isEmpty) return false;
+
+    final messageId = data[0];
+    return (messageId >= 20 && messageId <= 49) || messageId <= 4;
   }
 }
