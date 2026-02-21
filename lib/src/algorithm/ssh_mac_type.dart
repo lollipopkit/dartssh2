@@ -30,6 +30,8 @@ class SSHMacType extends SSHAlgorithm {
     macFactory: _hmacSha512Factory,
   );
 
+  // Non-standard MAC: RFC 6668/IANA only standardizes hmac-sha2-256 and hmac-sha2-512.
+  // These use custom names and are not IANA-registered.
   static const hmacSha256_96 = SSHMacType._(
     name: 'hmac-sha2-256-96',
     keySize: 32,

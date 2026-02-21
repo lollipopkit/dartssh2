@@ -257,10 +257,8 @@ class SSHTransport {
       payloadToEncrypt.setRange(1 + data.length, packetLength, paddingBytes);
 
       // Verify that the payload length is a multiple of the block size
-      if (payloadToEncrypt.length % blockSize != 0) {
-        throw StateError(
-            'Payload length ${payloadToEncrypt.length} is not a multiple of block size $blockSize');
-      }
+      assert(payloadToEncrypt.length % blockSize == 0,
+          'Payload length ${payloadToEncrypt.length} is not a multiple of block size $blockSize');
 
       // Encrypt the payload
       final encryptedPayload = _encryptCipher!.processAll(payloadToEncrypt);
@@ -542,11 +540,6 @@ class SSHTransport {
     if (isEtm) {
       // For ETM (Encrypt-Then-MAC) algorithms, the packet length is in plaintext
       // followed by the encrypted payload and then the MAC
-
-      // We need at least 4 bytes to read the packet length
-      if (_buffer.length < 4) {
-        return null;
-      }
 
       // Read the packet length from the plaintext data
       final packetLength = SSHPacket.readPacketLength(_buffer.data);
