@@ -160,6 +160,9 @@ class SSHTransport {
   /// when the transport is acting as a server.
   var _hostkeyVerified = false;
 
+  /// Whether the transport ready callback has been dispatched.
+  var _readyDispatched = false;
+
   /// Shared secret derived from the key exchange process. Kept to derive the
   /// cipher IV, cipher key and MAC key.
   BigInt? _sharedSecret;
@@ -1538,7 +1541,10 @@ class SSHTransport {
     if (_hostkeyVerified) {
       _sendNewKeys();
       _applyLocalKeys();
-      onReady?.call();
+      if (!_readyDispatched) {
+        _readyDispatched = true;
+        onReady?.call();
+      }
       return;
     }
 
@@ -1573,7 +1579,10 @@ class SSHTransport {
           _hostkeyVerified = true;
           _sendNewKeys();
           _applyLocalKeys();
-          onReady?.call();
+          if (!_readyDispatched) {
+            _readyDispatched = true;
+            onReady?.call();
+          }
         }
       },
       onError: (error, stack) {

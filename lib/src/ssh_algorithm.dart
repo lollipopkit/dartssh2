@@ -136,8 +136,6 @@ class SSHAlgorithms {
       SSHMacType.hmacSha512Etm,
       SSHMacType.hmacSha256,
       SSHMacType.hmacSha512,
-      SSHMacType.hmacSha256_96,
-      SSHMacType.hmacSha512_96,
       SSHMacType.hmacSha1,
       SSHMacType.hmacMd5,
     ],
