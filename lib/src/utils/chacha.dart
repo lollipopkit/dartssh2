@@ -1,13 +1,10 @@
 import 'dart:typed_data';
 
-import 'package:meta/meta.dart';
-
 /// Splits OpenSSH ChaCha20-Poly1305 key material into length and payload keys.
 ///
 /// OpenSSH derives 64 bytes per direction. The first 32 bytes rekey the packet
 /// length stream cipher, while the remaining 32 bytes encrypt payloads and
 /// derive Poly1305 one-time keys.
-@visibleForTesting
 ({Uint8List lenKey, Uint8List encKey}) splitOpenSSHChaChaKeys(
   Uint8List keyMaterial,
 ) {

@@ -1527,10 +1527,6 @@ class SSHTransport {
     _sessionId ??= exchangeHash;
     _sharedSecret = sharedSecret;
 
-    // Compute MD5 and SHA256 fingerprints of the received host key.
-    final fingerprint = MD5Digest().process(hostkey);
-    final fingerprintSha256 = SHA256Digest().process(hostkey);
-
     if (_hostkeyVerified) {
       _sendNewKeys();
       _applyLocalKeys();
@@ -1540,6 +1536,10 @@ class SSHTransport {
       }
       return;
     }
+
+    // Compute MD5 and SHA256 fingerprints of the received host key.
+    final fingerprint = MD5Digest().process(hostkey);
+    final fingerprintSha256 = SHA256Digest().process(hostkey);
 
     final fingerprintHex =
         fingerprint.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':');
