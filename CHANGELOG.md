@@ -182,6 +182,8 @@
 [#126]: https://github.com/TerminalStudio/dartssh2/pull/126
 [#125]: https://github.com/TerminalStudio/dartssh2/pull/125
 [#123]: https://github.com/TerminalStudio/dartssh2/pull/123
+[#116]: https://github.com/TerminalStudio/dartssh2/pull/116
+[#115]: https://github.com/TerminalStudio/dartssh2/pull/115
 [#101]: https://github.com/TerminalStudio/dartssh2/pull/101
 [#100]: https://github.com/TerminalStudio/dartssh2/issues/100
 [#80]: https://github.com/TerminalStudio/dartssh2/issues/80
