@@ -53,7 +53,6 @@ abstract class SSHAlgorithm {
     return true;
   }
 
-
   @override
   String toString() {
     assert(isValidAlgorithmName, 'Invalid algorithm name: $name');
@@ -131,17 +130,17 @@ class SSHAlgorithms {
       SSHCipherType.aes256cbc,
       SSHCipherType.aes128cbc,
     ],
-    // Prefer modern SHA-2 MACs by default; keep SHA-1 as fallback and MD5 last.
+    // Prefer modern SHA-2 MACs by default; full-length variants first,
+    // ETM variants for better security, truncated 96-bit as last-resort fallback.
     this.mac = const [
-      SSHMacType.hmacSha256_96,
-      SSHMacType.hmacSha512_96,
       SSHMacType.hmacSha256Etm,
       SSHMacType.hmacSha512Etm,
-      SSHMacType.hmacSha1,
       SSHMacType.hmacSha256,
       SSHMacType.hmacSha512,
       SSHMacType.hmacSha1,
       SSHMacType.hmacMd5,
+      SSHMacType.hmacSha256_96,
+      SSHMacType.hmacSha512_96,
     ],
   });
 }

@@ -12,7 +12,14 @@ void main(List<String> args) async {
     onPasswordRequest: () {
       stdout.write('Password: ');
       stdin.echoMode = false;
-      return stdin.readLineSync() ?? exit(1);
+      String? password;
+      try {
+        password = stdin.readLineSync();
+      } finally {
+        stdin.echoMode = true;
+      }
+      if (password == null) exit(1);
+      return password;
     },
   );
 
