@@ -510,7 +510,9 @@ class SSHHttpClientResponse {
         if (name == SSHHttpHeaders.transferEncodingHeader &&
             normalizedValue != 'identity' &&
             normalizedValue != 'chunked') {
-          throw UnsupportedError('only identity transfer encoding is accepted');
+          throw UnsupportedError(
+            "only 'identity' or 'chunked' transfer encodings are accepted: $normalizedValue",
+          );
         }
         if (name == SSHHttpHeaders.contentLengthHeader) {
           contentLength = int.parse(value);

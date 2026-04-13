@@ -76,6 +76,14 @@ class SSHPem {
   }
 
   String encode([int lineLength = 64]) {
+    if (lineLength < 1) {
+      throw ArgumentError.value(
+        lineLength,
+        'lineLength',
+        'must be at least 1',
+      );
+    }
+
     final encoded = base64.encode(content);
     final lines = <String>['-----BEGIN $type-----'];
     for (var i = 0; i < encoded.length; i += lineLength) {

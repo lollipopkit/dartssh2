@@ -1,28 +1,27 @@
 import 'package:dartssh2/dartssh2.dart';
 
 import 'package:test/test.dart';
+import 'dart:typed_data';
 
-void main() {
-  test('SSHPem.decode works', () {
-    final pem = SSHPem.decode(r'''-----BEGIN OPENSSH PRIVATE KEY-----
+const _openSshPrivateKeyPem = r'''-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 QyNTUxOQAAACBZnnnYZjFQ7Zt0gMyJ2YYmDINTucLFWY81/Wuv2aOIpAAAAKBQ6gOSUOoD
 kgAAAAtzc2gtZWQyNTUxOQAAACBZnnnYZjFQ7Zt0gMyJ2YYmDINTucLFWY81/Wuv2aOIpA
 AAAEAP8fq0hjlR3jhL7pg+26PSaMiC1V/RrinVbo/4eBMRNFmeedhmMVDtm3SAzInZhiYM
 g1O5wsVZjzX9a6/Zo4ikAAAAGWpmb3V0dHNAVVNBSkZPVVRUU00ubG9jYWwBAgME
------END OPENSSH PRIVATE KEY-----''');
+-----END OPENSSH PRIVATE KEY-----''';
+
+void main() {
+  test('SSHPem.decode works', () {
+    final pem = SSHPem.decode(_openSshPrivateKeyPem);
 
     expect(pem.type, 'OPENSSH PRIVATE KEY');
   });
 
   test('SSHPem.decode works with crlf not just lf', () {
-    final pem = SSHPem.decode('-----BEGIN OPENSSH PRIVATE KEY-----\r\n'
-        'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\r\n'
-        'QyNTUxOQAAACBZnnnYZjFQ7Zt0gMyJ2YYmDINTucLFWY81/Wuv2aOIpAAAAKBQ6gOSUOoD\r\n'
-        'kgAAAAtzc2gtZWQyNTUxOQAAACBZnnnYZjFQ7Zt0gMyJ2YYmDINTucLFWY81/Wuv2aOIpA\r\n'
-        'AAAEAP8fq0hjlR3jhL7pg+26PSaMiC1V/RrinVbo/4eBMRNFmeedhmMVDtm3SAzInZhiYM\r\n'
-        'g1O5wsVZjzX9a6/Zo4ikAAAAGWpmb3V0dHNAVVNBSkZPVVRUU00ubG9jYWwBAgME\r\n'
-        '-----END OPENSSH PRIVATE KEY-----\r\n');
+    final pem = SSHPem.decode(
+      '${_openSshPrivateKeyPem.replaceAll('\n', '\r\n')}\r\n',
+    );
 
     expect(pem.type, 'OPENSSH PRIVATE KEY');
   });
@@ -46,5 +45,12 @@ g1O5wsVZjzX9a6/Zo4ikAAAAGWpmb3V0dHNAVVNBSkZPVVRUU00ubG9jYWwBAgME
 
   test('SSHPem.decode throws on invalid PEM', () {
     expect(() => SSHPem.decode(''), throwsA(isA<FormatException>()));
+  });
+
+  test('SSHPem.encode rejects non-positive lineLength', () {
+    expect(
+      () => SSHPem('TEST', {}, Uint8List.fromList([1, 2, 3])).encode(0),
+      throwsA(isA<ArgumentError>()),
+    );
   });
 }

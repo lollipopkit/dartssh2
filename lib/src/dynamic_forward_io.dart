@@ -188,9 +188,9 @@ class _SocksConnection {
     }
 
     if (_state == _SocksState.request) {
+      if (_dialing) return;
       final target = _parseConnectRequest();
       if (target == null) return;
-      if (_dialing) return;
       _dialing = true;
 
       if (filter != null && !filter!(target.host, target.port)) {

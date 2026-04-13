@@ -162,10 +162,16 @@ void main() {
         expect(e, isA<SSHAuthAbortError>());
         final reason = (e as SSHAuthAbortError).reason;
         expect(
-          reason == null ||
-              reason is SSHSocketError ||
-              reason is SSHHandshakeError,
-          isTrue,
+          reason,
+          anyOf(
+            isNull,
+            isA<SSHSocketError>(),
+            predicate(
+              (error) =>
+                  error is SSHHandshakeError &&
+                  error.message.startsWith('Invalid version:'),
+            ),
+          ),
         );
       }
 
