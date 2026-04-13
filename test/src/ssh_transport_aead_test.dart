@@ -275,6 +275,7 @@ void main() {
       reflect(transport).invoke(privateSymbol('_applyLocalKeys'), const []);
       expect(getPrivate<Uint8List?>(transport, '_localCipherKey'), isNull);
       expect(getPrivate<Uint8List?>(transport, '_localIV'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_localAeadKey'), isNull);
       expect(
           getPrivate<Uint8List?>(transport, '_localChaChaEncKey'), isNotNull);
       expect(
@@ -293,6 +294,10 @@ void main() {
       reflect(transport).invoke(privateSymbol('_applyRemoteKeys'), const []);
       expect(getPrivate<Uint8List?>(transport, '_remoteCipherKey'), isNull);
       expect(getPrivate<Uint8List?>(transport, '_remoteIV'), isNull);
+      expect(
+        getPrivate<Uint8List?>(transport, '_remoteAeadFixedNonce'),
+        isNull,
+      );
       expect(
         getPrivate<Uint8List?>(transport, '_remoteChaChaEncKey'),
         isNotNull,
