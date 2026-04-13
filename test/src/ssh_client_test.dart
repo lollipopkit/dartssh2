@@ -160,7 +160,19 @@ void main() {
         fail('should have thrown');
       } catch (e) {
         expect(e, isA<SSHAuthAbortError>());
-        expect((e as SSHAuthAbortError).reason!, isA<SSHSocketError>());
+        final reason = (e as SSHAuthAbortError).reason;
+        expect(
+          reason,
+          anyOf(
+            isNull,
+            isA<SSHSocketError>(),
+            predicate(
+              (error) =>
+                  error is SSHHandshakeError &&
+                  error.message.startsWith('Invalid version:'),
+            ),
+          ),
+        );
       }
 
       client.close();

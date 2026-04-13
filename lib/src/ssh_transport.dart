@@ -175,7 +175,6 @@ class SSHTransport {
 
   // AEAD (GCM / ChaCha20-Poly1305) keys and nonces (per direction)
   Uint8List? _localAeadKey; // key for data we send
-// 12-byte fixed part of nonce for data we send
   Uint8List? _remoteAeadKey; // key for data we receive
   Uint8List?
       _remoteAeadFixedNonce; // 12-byte fixed part of nonce for data we receive
@@ -498,7 +497,8 @@ class SSHTransport {
     }
 
     final versionString = bufferString.substring(0, index);
-    if (!versionString.startsWith('SSH-2.0-')) {
+    if (!(versionString.startsWith('SSH-2.0-') ||
+        versionString.startsWith('SSH-1.99-'))) {
       socket.sink.add(latin1.encode('Protocol mismatch\r\n'));
       throw SSHHandshakeError('Invalid version: $versionString');
     }
@@ -996,6 +996,8 @@ class SSHTransport {
         _localChaChaLenKey = lenKey;
         _localChaChaEncKey = encKey;
         _localAeadKey = null;
+        _localCipherKey = null;
+        _localIV = null;
       } else {
         // AEAD: derive key and fixed nonce (12 bytes) for sender direction
         final key = _deriveKey(
@@ -1009,6 +1011,8 @@ class SSHTransport {
         _localAeadKey = key;
         _localCipherKey = key;
         _localIV = iv;
+        _localChaChaEncKey = null;
+        _localChaChaLenKey = null;
       }
       _encryptCipher = null;
       _localMac = null; // AEAD provides integrity
@@ -1040,6 +1044,8 @@ class SSHTransport {
       _localAeadKey = null;
       _localCipherKey = null;
       _localIV = null;
+      _localChaChaEncKey = null;
+      _localChaChaLenKey = null;
     }
   }
 
@@ -1059,6 +1065,8 @@ class SSHTransport {
         _remoteChaChaEncKey = encKey;
         _remoteAeadKey = null;
         _remoteAeadFixedNonce = null;
+        _remoteCipherKey = null;
+        _remoteIV = null;
       } else {
         final key = _deriveKey(
           isClient ? SSHDeriveKeyType.serverKey : SSHDeriveKeyType.clientKey,
@@ -1072,6 +1080,8 @@ class SSHTransport {
         _remoteAeadFixedNonce = Uint8List.sublistView(iv, 0, 12);
         _remoteCipherKey = key;
         _remoteIV = iv;
+        _remoteChaChaEncKey = null;
+        _remoteChaChaLenKey = null;
       }
       _decryptCipher = null;
       _remoteMac = null; // AEAD provides integrity
@@ -1100,8 +1110,11 @@ class SSHTransport {
       _remoteMac = macType.createMac(macKey);
 
       _remoteAeadKey = null;
+      _remoteAeadFixedNonce = null;
       _remoteCipherKey = null;
       _remoteIV = null;
+      _remoteChaChaEncKey = null;
+      _remoteChaChaLenKey = null;
     }
   }
 

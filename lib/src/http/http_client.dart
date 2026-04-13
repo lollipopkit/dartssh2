@@ -506,9 +506,13 @@ class SSHHttpClientResponse {
         final name =
             normalizedLine.substring(0, separator).toLowerCase().trim();
         final value = normalizedLine.substring(separator + 1).trim();
+        final normalizedValue = value.toLowerCase();
         if (name == SSHHttpHeaders.transferEncodingHeader &&
-            value.toLowerCase() != 'identity') {
-          throw UnsupportedError('only identity transfer encoding is accepted');
+            normalizedValue != 'identity' &&
+            normalizedValue != 'chunked') {
+          throw UnsupportedError(
+            "only 'identity' or 'chunked' transfer encodings are accepted: $normalizedValue",
+          );
         }
         if (name == SSHHttpHeaders.contentLengthHeader) {
           contentLength = int.parse(value);

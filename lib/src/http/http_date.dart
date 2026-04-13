@@ -9,6 +9,14 @@
 DateTime? parseHttpDate(String input) {
   final s = input.trim();
 
+  final hasExplicitTimezone = RegExp(r'(?:Z|[+-]\d{2}:\d{2})$').hasMatch(s);
+  if (hasExplicitTimezone) {
+    final iso8601 = DateTime.tryParse(s);
+    if (iso8601 != null) {
+      return iso8601.toUtc();
+    }
+  }
+
   // Month map (lowercase)
   const months = {
     'jan': 1,

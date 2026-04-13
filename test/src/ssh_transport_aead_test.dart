@@ -241,6 +241,183 @@ void main() {
       transport.close();
     });
 
+    test('rekey to ChaCha clears stale GCM cipher state', () {
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket);
+
+      setPrivate(transport, '_kexType', SSHKexType.x25519);
+      setPrivate(
+        transport,
+        '_sharedSecret',
+        BigInt.from(21),
+      );
+      setPrivate(
+        transport,
+        '_exchangeHash',
+        Uint8List.fromList(List<int>.filled(32, 22)),
+      );
+      setPrivate(
+        transport,
+        '_sessionId',
+        Uint8List.fromList(List<int>.filled(32, 23)),
+      );
+
+      setPrivate(transport, '_clientCipherType', SSHCipherType.aes128gcm);
+      reflect(transport).invoke(privateSymbol('_applyLocalKeys'), const []);
+      expect(getPrivate<Uint8List?>(transport, '_localCipherKey'), isNotNull);
+      expect(getPrivate<Uint8List?>(transport, '_localIV'), isNotNull);
+
+      setPrivate(
+        transport,
+        '_clientCipherType',
+        SSHCipherType.chacha20poly1305,
+      );
+      reflect(transport).invoke(privateSymbol('_applyLocalKeys'), const []);
+      expect(getPrivate<Uint8List?>(transport, '_localCipherKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_localIV'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_localAeadKey'), isNull);
+      expect(
+          getPrivate<Uint8List?>(transport, '_localChaChaEncKey'), isNotNull);
+      expect(
+          getPrivate<Uint8List?>(transport, '_localChaChaLenKey'), isNotNull);
+
+      setPrivate(transport, '_serverCipherType', SSHCipherType.aes128gcm);
+      reflect(transport).invoke(privateSymbol('_applyRemoteKeys'), const []);
+      expect(getPrivate<Uint8List?>(transport, '_remoteCipherKey'), isNotNull);
+      expect(getPrivate<Uint8List?>(transport, '_remoteIV'), isNotNull);
+
+      setPrivate(
+        transport,
+        '_serverCipherType',
+        SSHCipherType.chacha20poly1305,
+      );
+      reflect(transport).invoke(privateSymbol('_applyRemoteKeys'), const []);
+      expect(getPrivate<Uint8List?>(transport, '_remoteCipherKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_remoteIV'), isNull);
+      expect(
+        getPrivate<Uint8List?>(transport, '_remoteAeadFixedNonce'),
+        isNull,
+      );
+      expect(
+        getPrivate<Uint8List?>(transport, '_remoteChaChaEncKey'),
+        isNotNull,
+      );
+      expect(
+        getPrivate<Uint8List?>(transport, '_remoteChaChaLenKey'),
+        isNotNull,
+      );
+
+      transport.close();
+    });
+
+    test('rekey from ChaCha clears stale ChaCha state', () {
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket);
+
+      setPrivate(transport, '_kexType', SSHKexType.x25519);
+      setPrivate(
+        transport,
+        '_sharedSecret',
+        BigInt.from(31),
+      );
+      setPrivate(
+        transport,
+        '_exchangeHash',
+        Uint8List.fromList(List<int>.filled(32, 32)),
+      );
+      setPrivate(
+        transport,
+        '_sessionId',
+        Uint8List.fromList(List<int>.filled(32, 33)),
+      );
+
+      setPrivate(
+        transport,
+        '_clientCipherType',
+        SSHCipherType.chacha20poly1305,
+      );
+      reflect(transport).invoke(privateSymbol('_applyLocalKeys'), const []);
+      expect(
+        getPrivate<Uint8List?>(transport, '_localChaChaEncKey'),
+        isNotNull,
+      );
+      expect(
+        getPrivate<Uint8List?>(transport, '_localChaChaLenKey'),
+        isNotNull,
+      );
+
+      setPrivate(transport, '_clientCipherType', SSHCipherType.aes128gcm);
+      reflect(transport).invoke(privateSymbol('_applyLocalKeys'), const []);
+      expect(getPrivate<Uint8List?>(transport, '_localChaChaEncKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_localChaChaLenKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_localAeadKey'), isNotNull);
+      expect(getPrivate<Uint8List?>(transport, '_localCipherKey'), isNotNull);
+      expect(getPrivate<Uint8List?>(transport, '_localIV'), isNotNull);
+
+      setPrivate(
+        transport,
+        '_clientCipherType',
+        SSHCipherType.aes128ctr,
+      );
+      setPrivate(transport, '_clientMacType', SSHMacType.hmacSha256);
+      reflect(transport).invoke(privateSymbol('_applyLocalKeys'), const []);
+      expect(getPrivate<Uint8List?>(transport, '_localChaChaEncKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_localChaChaLenKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_localAeadKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_localCipherKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_localIV'), isNull);
+      expect(getPrivate<Object?>(transport, '_encryptCipher'), isNotNull);
+      expect(getPrivate<Object?>(transport, '_localMac'), isNotNull);
+
+      setPrivate(
+        transport,
+        '_serverCipherType',
+        SSHCipherType.chacha20poly1305,
+      );
+      reflect(transport).invoke(privateSymbol('_applyRemoteKeys'), const []);
+      expect(
+        getPrivate<Uint8List?>(transport, '_remoteChaChaEncKey'),
+        isNotNull,
+      );
+      expect(
+        getPrivate<Uint8List?>(transport, '_remoteChaChaLenKey'),
+        isNotNull,
+      );
+
+      setPrivate(transport, '_serverCipherType', SSHCipherType.aes128gcm);
+      reflect(transport).invoke(privateSymbol('_applyRemoteKeys'), const []);
+      expect(getPrivate<Uint8List?>(transport, '_remoteChaChaEncKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_remoteChaChaLenKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_remoteAeadKey'), isNotNull);
+      expect(
+        getPrivate<Uint8List?>(transport, '_remoteAeadFixedNonce'),
+        isNotNull,
+      );
+      expect(getPrivate<Uint8List?>(transport, '_remoteCipherKey'), isNotNull);
+      expect(getPrivate<Uint8List?>(transport, '_remoteIV'), isNotNull);
+
+      setPrivate(
+        transport,
+        '_serverCipherType',
+        SSHCipherType.aes128ctr,
+      );
+      setPrivate(transport, '_serverMacType', SSHMacType.hmacSha256);
+      reflect(transport).invoke(privateSymbol('_applyRemoteKeys'), const []);
+      expect(getPrivate<Uint8List?>(transport, '_remoteChaChaEncKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_remoteChaChaLenKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_remoteAeadKey'), isNull);
+      expect(
+        getPrivate<Uint8List?>(transport, '_remoteAeadFixedNonce'),
+        isNull,
+      );
+      expect(getPrivate<Uint8List?>(transport, '_remoteCipherKey'), isNull);
+      expect(getPrivate<Uint8List?>(transport, '_remoteIV'), isNull);
+      expect(getPrivate<Object?>(transport, '_decryptCipher'), isNotNull);
+      expect(getPrivate<Object?>(transport, '_remoteMac'), isNotNull);
+
+      transport.close();
+    });
+
     test('applyLocalKeys creates cipher and mac for non-AEAD algorithms', () {
       final socket = _CaptureSSHSocket();
       final transport = SSHTransport(socket);

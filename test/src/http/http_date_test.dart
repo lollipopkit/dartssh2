@@ -44,5 +44,10 @@ void main() {
       final d = parseHttpDate('not a date');
       expect(d, isNull);
     });
+
+    test('returns null for ISO-8601 without explicit timezone', () {
+      final d = parseHttpDate('2026-04-13T10:00:00');
+      expect(d, isNull);
+    });
   });
 }

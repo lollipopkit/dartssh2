@@ -9,18 +9,25 @@ import 'package:test/test.dart';
 import '../test_utils.dart';
 
 void main() {
-  final rsaPrivate = fixture('ssh-rsa/id_rsa');
-  final rsaPrivateOpenSSH = fixture('ssh-rsa/id_rsa.openssh');
+  final rsaPrivate = fixture('ssh-rsa/id_rsa', normalizeNewlines: true);
+  final rsaPrivateOpenSSH =
+      fixture('ssh-rsa/id_rsa.openssh', normalizeNewlines: true);
 
-  final rsaPrivateEncrypted = fixture('ssh-rsa-passphrase/id_rsa');
+  final rsaPrivateEncrypted =
+      fixture('ssh-rsa-passphrase/id_rsa', normalizeNewlines: true);
   final rsaPassphrase = fixture('ssh-rsa-passphrase/passphrase');
 
-  final ecdsaNistP256Private = fixture('ecdsa-sha2-nistp256/id_ecdsa');
-  final ecdsaNistP384Private = fixture('ecdsa-sha2-nistp384/id_ecdsa');
-  final ecdsaNistP521Private = fixture('ecdsa-sha2-nistp521/id_ecdsa');
+  final ecdsaNistP256Private =
+      fixture('ecdsa-sha2-nistp256/id_ecdsa', normalizeNewlines: true);
+  final ecdsaNistP384Private =
+      fixture('ecdsa-sha2-nistp384/id_ecdsa', normalizeNewlines: true);
+  final ecdsaNistP521Private =
+      fixture('ecdsa-sha2-nistp521/id_ecdsa', normalizeNewlines: true);
 
-  final ed25519Private = fixture('ssh-ed25519/id_ed25519');
-  final ed25519PrivateEncrypted = fixture('ssh-ed25519-passphrase/id_ed25519');
+  final ed25519Private =
+      fixture('ssh-ed25519/id_ed25519', normalizeNewlines: true);
+  final ed25519PrivateEncrypted =
+      fixture('ssh-ed25519-passphrase/id_ed25519', normalizeNewlines: true);
   final ed25519PrivatePassphrase = fixture('ssh-ed25519-passphrase/passphrase');
 
   const legacyEcPrivateKey = '''-----BEGIN EC PRIVATE KEY-----

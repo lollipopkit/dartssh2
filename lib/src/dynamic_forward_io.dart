@@ -69,8 +69,8 @@ class _SSHDynamicForwardImpl implements SSHDynamicForward {
       onClosed: () => _connections.remove(connection),
     );
 
-    connection.start();
     _connections.add(connection);
+    connection.start();
   }
 
   @override
@@ -189,13 +189,13 @@ class _SocksConnection {
 
     if (_state == _SocksState.request) {
       if (_dialing) return;
-      _dialing = true;
-
       final target = _parseConnectRequest();
       if (target == null) return;
+      _dialing = true;
 
       if (filter != null && !filter!(target.host, target.port)) {
         _sendReply(_SocksReply.connectionNotAllowed);
+        _dialing = false;
         await close();
         return;
       }
