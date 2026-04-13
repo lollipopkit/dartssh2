@@ -275,8 +275,10 @@ void main() {
       reflect(transport).invoke(privateSymbol('_applyLocalKeys'), const []);
       expect(getPrivate<Uint8List?>(transport, '_localCipherKey'), isNull);
       expect(getPrivate<Uint8List?>(transport, '_localIV'), isNull);
-      expect(getPrivate<Uint8List?>(transport, '_localChaChaEncKey'), isNotNull);
-      expect(getPrivate<Uint8List?>(transport, '_localChaChaLenKey'), isNotNull);
+      expect(
+          getPrivate<Uint8List?>(transport, '_localChaChaEncKey'), isNotNull);
+      expect(
+          getPrivate<Uint8List?>(transport, '_localChaChaLenKey'), isNotNull);
 
       setPrivate(transport, '_serverCipherType', SSHCipherType.aes128gcm);
       reflect(transport).invoke(privateSymbol('_applyRemoteKeys'), const []);
