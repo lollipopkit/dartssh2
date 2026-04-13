@@ -1,4 +1,4 @@
-name: flutter analysis
+name: dart analysis
 
 on:
   push:
@@ -10,18 +10,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable' # or: 'beta', 'dev' or 'main'
+      - uses: dart-lang/setup-dart@v1
 
       - name: Install dependencies
-        run: flutter pub get
+        run: dart pub get
 
       - name: Verify formatting
-        run: dart format --set-exit-if-changed .
+        run: dart format --output=none --set-exit-if-changed .
 
       - name: Analyze project source
         run: dart analyze
 
       - name: Run tests
-        run: flutter test
+        run: dart test

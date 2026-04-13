@@ -52,5 +52,9 @@ g1O5wsVZjzX9a6/Zo4ikAAAAGWpmb3V0dHNAVVNBSkZPVVRUU00ubG9jYWwBAgME
       () => SSHPem('TEST', {}, Uint8List.fromList([1, 2, 3])).encode(0),
       throwsA(isA<ArgumentError>()),
     );
+    expect(
+      () => SSHPem('TEST', {}, Uint8List.fromList([1, 2, 3])).encode(-1),
+      throwsA(isA<ArgumentError>()),
+    );
   });
 }

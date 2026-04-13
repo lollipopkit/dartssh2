@@ -175,7 +175,6 @@ class SSHTransport {
 
   // AEAD (GCM / ChaCha20-Poly1305) keys and nonces (per direction)
   Uint8List? _localAeadKey; // key for data we send
-// 12-byte fixed part of nonce for data we send
   Uint8List? _remoteAeadKey; // key for data we receive
   Uint8List?
       _remoteAeadFixedNonce; // 12-byte fixed part of nonce for data we receive
@@ -997,6 +996,8 @@ class SSHTransport {
         _localChaChaLenKey = lenKey;
         _localChaChaEncKey = encKey;
         _localAeadKey = null;
+        _localCipherKey = null;
+        _localIV = null;
       } else {
         // AEAD: derive key and fixed nonce (12 bytes) for sender direction
         final key = _deriveKey(
@@ -1060,6 +1061,8 @@ class SSHTransport {
         _remoteChaChaEncKey = encKey;
         _remoteAeadKey = null;
         _remoteAeadFixedNonce = null;
+        _remoteCipherKey = null;
+        _remoteIV = null;
       } else {
         final key = _deriveKey(
           isClient ? SSHDeriveKeyType.serverKey : SSHDeriveKeyType.clientKey,
