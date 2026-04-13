@@ -1011,6 +1011,8 @@ class SSHTransport {
         _localAeadKey = key;
         _localCipherKey = key;
         _localIV = iv;
+        _localChaChaEncKey = null;
+        _localChaChaLenKey = null;
       }
       _encryptCipher = null;
       _localMac = null; // AEAD provides integrity
@@ -1042,6 +1044,8 @@ class SSHTransport {
       _localAeadKey = null;
       _localCipherKey = null;
       _localIV = null;
+      _localChaChaEncKey = null;
+      _localChaChaLenKey = null;
     }
   }
 
@@ -1076,6 +1080,8 @@ class SSHTransport {
         _remoteAeadFixedNonce = Uint8List.sublistView(iv, 0, 12);
         _remoteCipherKey = key;
         _remoteIV = iv;
+        _remoteChaChaEncKey = null;
+        _remoteChaChaLenKey = null;
       }
       _decryptCipher = null;
       _remoteMac = null; // AEAD provides integrity
@@ -1104,8 +1110,11 @@ class SSHTransport {
       _remoteMac = macType.createMac(macKey);
 
       _remoteAeadKey = null;
+      _remoteAeadFixedNonce = null;
       _remoteCipherKey = null;
       _remoteIV = null;
+      _remoteChaChaEncKey = null;
+      _remoteChaChaLenKey = null;
     }
   }
 
