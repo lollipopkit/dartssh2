@@ -71,6 +71,15 @@ $body
 MAA=
 -----END EC PRIVATE KEY-----''';
 
+  const ed25519PrivateWithMalformedComment =
+      '''-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACDlG3DfOiDggnpz9fbC7Q+6e7jOiHX3Xv5AYxeSuFc4/gAAAJg95O0uPeTt
+LgAAAAtzc2gtZWQyNTUxOQAAACDlG3DfOiDggnpz9fbC7Q+6e7jOiHX3Xv5AYxeSuFc4/g
+AAAEAei2GY/cf5G6F8B8GSqfzP2NdOqXQYTpnLTt1M+vZZfuUbcN86IOCCenP19sLtD7p7
+uM6Idfde/kBjF5K4Vzj+AAAADjI1NDk2QLuou/CkzlBDAQIDBAUGBw==
+-----END OPENSSH PRIVATE KEY-----''';
+
   test('SSHKeyPair.fromPem works with RSA private key', () async {
     final pem = rsaPrivate;
     final keypair = SSHKeyPair.fromPem(pem);
@@ -108,6 +117,19 @@ MAA=
     final keypairs = SSHKeyPair.fromPem(pem);
     expect(keypairs.length, 1);
     expect(keypairs.single, isA<OpenSSHEd25519KeyPair>());
+  });
+
+  test('SSHKeyPair.fromPem accepts Ed25519 key with malformed comment',
+      () async {
+    expect(
+        SSHKeyPair.isEncryptedPem(ed25519PrivateWithMalformedComment), false);
+
+    final keypairs = SSHKeyPair.fromPem(ed25519PrivateWithMalformedComment);
+
+    expect(keypairs.length, 1);
+    final keypair = keypairs.single as OpenSSHEd25519KeyPair;
+    expect(keypair.publicKey.length, 32);
+    expect(keypair.privateKey.length, 64);
   });
 
   test('SSHKeyPair.fromPem works with legacy EC PRIVATE KEY format', () async {
