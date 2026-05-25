@@ -72,15 +72,12 @@ $body
 MAA=
 -----END EC PRIVATE KEY-----''';
 
-  const ed25519PrivateWithMalformedComment =
-      '''-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACDlG3DfOiDggnpz9fbC7Q+6e7jOiHX3Xv5AYxeSuFc4/gAAAJg95O0uPeTt
-LgAAAAtzc2gtZWQyNTUxOQAAACDlG3DfOiDggnpz9fbC7Q+6e7jOiHX3Xv5AYxeSuFc4/g
-AAAEAei2GY/cf5G6F8B8GSqfzP2NdOqXQYTpnLTt1M+vZZfuUbcN86IOCCenP19sLtD7p7
-uM6Idfde/kBjF5K4Vzj+AAAADjI1NDk2QLuou/CkzlBDAQIDBAUGBw==
------END OPENSSH PRIVATE KEY-----''';
-
+  /// Returns [pemText] with the OpenSSH private-key comment replaced by an
+  /// intentionally malformed UTF-8 sequence.
+  ///
+  /// The input and output are both PEM strings. The helper decodes the PEM,
+  /// parses the OpenSSH key blob, rebuilds the privateKeyBlob with the original
+  /// key material, and writes malformed bytes in place of the comment.
   String withMalformedOpenSSHComment(String pemText) {
     final pem = SSHPem.decode(pemText);
     final keyPairs = OpenSSHKeyPairs.decode(pem.content);
@@ -115,6 +112,7 @@ uM6Idfde/kBjF5K4Vzj+AAAADjI1NDk2QLuou/CkzlBDAQIDBAUGBw==
     }
 
     reader.readString();
+    // 0xBB and 0xA8 are UTF-8 continuation bytes without a leading byte.
     writer.writeString(Uint8List.fromList([0xbb, 0xa8]));
     writer.writeBytes(reader.readToEnd());
 
@@ -124,6 +122,8 @@ uM6Idfde/kBjF5K4Vzj+AAAADjI1NDk2QLuou/CkzlBDAQIDBAUGBw==
     ).toPem();
   }
 
+  final ed25519PrivateWithMalformedComment =
+      withMalformedOpenSSHComment(ed25519Private);
   final rsaPrivateOpenSSHWithMalformedComment =
       withMalformedOpenSSHComment(rsaPrivateOpenSSH);
   final ecdsaNistP256PrivateWithMalformedComment =
