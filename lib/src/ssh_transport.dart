@@ -388,8 +388,7 @@ class SSHTransport {
   }
 
   int _alignedPaddingLength(int payloadLength, int align) {
-    final paddingLength =
-        align - ((payloadLength + SSHPacket.headerLength) % align);
+    final paddingLength = align - ((payloadLength + 1) % align);
     return paddingLength < 4 ? paddingLength + align : paddingLength;
   }
 
@@ -755,7 +754,12 @@ class SSHTransport {
 
     final paddingLength = plaintext[0];
     final payloadLength = packetLength - paddingLength - 1;
-    _verifyPacketPadding(payloadLength, paddingLength);
+    _verifyPacketPadding(
+      payloadLength,
+      paddingLength,
+      expectedPacketAlign: cipherType.blockSize,
+      includePacketLength: false,
+    );
     return Uint8List.sublistView(plaintext, 1, 1 + payloadLength);
   }
 
@@ -767,15 +771,19 @@ class SSHTransport {
 
   /// Verifies that the padding of the packet is correct. Throws [SSHPacketError]
   /// if the padding is incorrect.
-  void _verifyPacketPadding(int payloadLength, int paddingLength) {
-    final expectedPacketAlign = _decryptCipher == null
+  void _verifyPacketPadding(
+    int payloadLength,
+    int paddingLength, {
+    int? expectedPacketAlign,
+    bool includePacketLength = true,
+  }) {
+    expectedPacketAlign ??= _decryptCipher == null
         ? SSHPacket.minAlign
         : max(SSHPacket.minAlign, _decryptCipher!.blockSize);
 
-    final minPaddingLength = SSHPacket.paddingLength(
-      payloadLength,
-      align: expectedPacketAlign,
-    );
+    final minPaddingLength = includePacketLength
+        ? SSHPacket.paddingLength(payloadLength, align: expectedPacketAlign)
+        : _alignedPaddingLength(payloadLength, expectedPacketAlign);
 
     if (paddingLength < minPaddingLength) {
       throw SSHPacketError(
