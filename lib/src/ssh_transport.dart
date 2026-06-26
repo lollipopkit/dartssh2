@@ -388,7 +388,8 @@ class SSHTransport {
   }
 
   int _alignedPaddingLength(int payloadLength, int align) {
-    final paddingLength = align - ((payloadLength + 1) % align);
+    final paddingLength =
+        align - ((payloadLength + SSHPacket.headerLength) % align);
     return paddingLength < 4 ? paddingLength + align : paddingLength;
   }
 

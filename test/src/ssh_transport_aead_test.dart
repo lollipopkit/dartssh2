@@ -112,8 +112,12 @@ void main() {
       setPrivate(sender, '_kexInProgress', false);
       setSequenceValue(sender, '_localPacketSN', 0);
 
-      final payload = Uint8List(32773);
-      payload[0] = 94; // SSH_MSG_CHANNEL_DATA.
+      final writer = SSHMessageWriter();
+      writer.writeUint8(94); // SSH_MSG_CHANNEL_DATA.
+      writer.writeUint32(0); // recipient channel id.
+      writer.writeString(Uint8List(32768));
+      final payload = writer.takeBytes();
+      expect(payload.length, 32777);
       sender.sendPacket(payload);
 
       final encryptedPacket = senderSocket.packets.last;
