@@ -532,7 +532,11 @@ class SSHTransport {
       }
 
       /// For safety & performance reasons, we limit the maximum packet size.
-      if (payload.length > SSHPacket.maxPayloadLength) {
+      ///
+      /// This payload is the decoded SSH message payload, not a channel data
+      /// payload. A valid SSH_MSG_CHANNEL_DATA carrying a 32768-byte channel
+      /// chunk has 1 + 4 + 4 + 32768 = 32777 bytes here.
+      if (payload.length > SSHPacket.maxLength) {
         throw SSHPacketError('Packet too long: ${payload.length}');
       }
 

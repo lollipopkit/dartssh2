@@ -20,10 +20,10 @@ import 'package:dartssh2/src/utils/chunk_buffer.dart';
 import 'package:dartssh2/src/message/base.dart';
 
 const _kVersion = 3;
-const _kReadChunkSize = 16 * 1024;
+const _kReadChunkSize = 32 * 1024;
 const _kReadMaxPendingRequests = 64;
-const _kDownloadChunkSize = 64 * 1024;
-const _kDownloadMaxPendingRequests = 128;
+const _kDownloadChunkSize = 32 * 1024;
+const _kDownloadMaxPendingRequests = 64;
 // 16MB SFTP packet size limit (implementation DoS/safety limit, not protocol
 // requirement; RFC 4253 / SFTP has no fixed maximum but 16MB is reasonable).
 const _kMaxPacketSize = 16 * 1024 * 1024;
