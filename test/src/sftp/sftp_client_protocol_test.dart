@@ -10,8 +10,6 @@ import 'package:dartssh2/src/ssh_channel.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:test/test.dart';
 
-const _packetTimeout = Duration(seconds: 1);
-
 void main() {
   group('SftpClient protocol', () {
     test('handshake completes with version packet', () async {
@@ -119,7 +117,7 @@ void main() {
       harness.dispose();
     });
 
-    test('download keeps chunk order with pipelined reads', () async {
+    test('read ramps pipeline after first data packet', () async {
       final harness = _SftpHarness();
       await harness.nextOutgoingPacket();
       harness.sendResponsePacket(SftpVersionPacket(3));
@@ -140,16 +138,17 @@ void main() {
       );
 
       final read1 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
-      final read2 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
-
       expect(read1.offset, 0);
+
+      harness.sendResponsePacket(
+        SftpDataPacket(read1.requestId, Uint8List.fromList('ABCD'.codeUnits)),
+      );
+
+      final read2 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
       expect(read2.offset, 4);
 
       harness.sendResponsePacket(
         SftpDataPacket(read2.requestId, Uint8List.fromList('EFGH'.codeUnits)),
-      );
-      harness.sendResponsePacket(
-        SftpDataPacket(read1.requestId, Uint8List.fromList('ABCD'.codeUnits)),
       );
 
       final close = SftpClosePacket.decode(await harness.nextOutgoingPacket());
@@ -190,24 +189,22 @@ void main() {
       );
 
       final read1 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
-      final read2 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
       expect(read1.offset, 0);
-      expect(read2.offset, 4);
 
-      final read3Future = harness.nextOutgoingPacket();
       harness.sendResponsePacket(
-        SftpDataPacket(read2.requestId, Uint8List.fromList('EFGH'.codeUnits)),
+        SftpDataPacket(read1.requestId, Uint8List.fromList('ABCD'.codeUnits)),
       );
-      final read3 = SftpReadPacket.decode(
-        await read3Future.timeout(_packetTimeout),
-      );
+
+      final read2 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
+      final read3 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
+      expect(read2.offset, 4);
       expect(read3.offset, 8);
 
       harness.sendResponsePacket(
         SftpDataPacket(read3.requestId, Uint8List.fromList('IJKL'.codeUnits)),
       );
       harness.sendResponsePacket(
-        SftpDataPacket(read1.requestId, Uint8List.fromList('ABCD'.codeUnits)),
+        SftpDataPacket(read2.requestId, Uint8List.fromList('EFGH'.codeUnits)),
       );
 
       final close = SftpClosePacket.decode(await harness.nextOutgoingPacket());
@@ -247,24 +244,28 @@ void main() {
       );
 
       final read1 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
-      final read2 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
       expect(read1.offset, 0);
       expect(read1.length, 4);
-      expect(read2.offset, 4);
-      expect(read2.length, 4);
 
-      final retryFuture = harness.nextOutgoingPacket();
       harness.sendResponsePacket(
         SftpDataPacket(read1.requestId, Uint8List.fromList('AB'.codeUnits)),
       );
-      final retry = SftpReadPacket.decode(
-        await retryFuture.timeout(_packetTimeout),
-      );
+      final retry = SftpReadPacket.decode(await harness.nextOutgoingPacket());
+      final read2 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
       expect(retry.offset, 2);
       expect(retry.length, 2);
+      expect(read2.offset, 4);
+      expect(read2.length, 2);
 
       harness.sendResponsePacket(
-        SftpDataPacket(read2.requestId, Uint8List.fromList('EFGH'.codeUnits)),
+        SftpDataPacket(read2.requestId, Uint8List.fromList('EF'.codeUnits)),
+      );
+      final read3 = SftpReadPacket.decode(await harness.nextOutgoingPacket());
+      expect(read3.offset, 6);
+      expect(read3.length, 2);
+
+      harness.sendResponsePacket(
+        SftpDataPacket(read3.requestId, Uint8List.fromList('GH'.codeUnits)),
       );
       harness.sendResponsePacket(
         SftpDataPacket(retry.requestId, Uint8List.fromList('CD'.codeUnits)),

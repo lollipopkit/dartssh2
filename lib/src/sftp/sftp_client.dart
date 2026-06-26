@@ -669,6 +669,7 @@ class SftpFile {
     StackTrace? pendingStackTrace;
     Completer<void>? completionSignal;
     var effectiveChunkSize = chunkSize;
+    var activeReadLimit = 1;
 
     void notifyReadComplete() {
       final signal = completionSignal;
@@ -694,6 +695,9 @@ class SftpFile {
       _readChunk(requestLength, startOffset).then(
         (chunk) {
           pendingReadCount--;
+          if (chunk != null && chunk.isNotEmpty) {
+            activeReadLimit = min(maxPendingRequests, activeReadLimit + 1);
+          }
           completionQueue.add((startOffset, chunk));
           if (chunk != null &&
               chunk.isNotEmpty &&
@@ -721,7 +725,7 @@ class SftpFile {
 
     void scheduleReads() {
       while (reservedOffset < endOffset &&
-          pendingReadCount < maxPendingRequests &&
+          pendingReadCount < activeReadLimit &&
           completedReads.length < maxPendingRequests) {
         final startOffset = reservedOffset;
         final requestLength =
