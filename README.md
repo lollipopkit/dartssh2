@@ -30,6 +30,7 @@ SSH and SFTP client written in pure Dart, aiming to be feature-rich as well as e
 -  **Authentication**: Supports password, private key and interactive authentication method.
 -  **Forwarding**: Supports local forwarding, remote forwarding, and dynamic forwarding (SOCKS5 CONNECT).
 -  **SFTP**: Supports all operations defined in [SFTPv3 protocol](https://datatracker.ietf.org/doc/html/draft-ietf-secsh-filexfer-02) including upload, download, list, link, remove, rename, etc.
+-  **Non-blocking Key Exchange**: Automatically offloads heavy key exchange calculations (X25519, NIST Curves, DH) to background isolates on supported VM platforms, preventing the main UI thread from freezing during connection.
 
 ## 🧬 Built with dartssh2
 
@@ -50,6 +51,10 @@ SSH and SFTP client written in pure Dart, aiming to be feature-rich as well as e
     <!-- Naviterm -->
     <td style="text-align: center;">
       <b><a href="https://github.com/jc-hk-1916/NaviTerm">Naviterm</a></b>
+    </td>
+    <!-- TealKit -->
+    <td style="text-align: center;">
+      <b><a href="https://github.com/lschaffer/tealkit">TealKit</a></b>
     </td>
   </tr>
 
@@ -75,12 +80,16 @@ SSH and SFTP client written in pure Dart, aiming to be feature-rich as well as e
         <img src="https://raw.githubusercontent.com/jc-hk-1916/NaviTerm/main/images/1.png" width="300px" alt="Your all-in-one SSH terminal, SFTP client, and port forwarding tool, built from the ground up for macOS, iPhone, and iPad.">
       </a>
     </td>
+    <!-- TealKit -->
+    <td>
+      <a href="https://github.com/lschaffer/tealkit">
+        <img src="https://github.com/lschaffer/tealkit/blob/master/images/repo/desktop_playground_ssh_test.png" width="500px" alt="TealKit multiplatform agentic AI platform utilizing isolated SSH tools">
+      </a>
+    </td>
   </tr>
 </table>
 
-
 > Feel free to add your own app here by opening a pull request.
-
 
 
 ## 🧪 Try
@@ -362,15 +371,17 @@ void main() async {
 }
 ```
 
-Decrypt PEM file with [`compute`](https://api.flutter.dev/flutter/foundation/compute-constant.html) in Flutter
+Decrypting encrypted PEM files (especially those using secure key derivation functions like `bcrypt` with many rounds) is a CPU-intensive operation that can freeze the UI. In Flutter, you can offload this decryption to a background isolate using the [`compute`](https://api.flutter.dev/flutter/foundation/compute-constant.html) function:
 
 ```dart
-void main() async {
-  List<SSHKeyPair> decryptKeyPairs(List<String> args) {
-    return SSHKeyPair.fromPem(args[0], args[1]);
-  }
+// The callback, message, and result must be sendable across isolates,
+// so it must be a top-level function (not a closure capturing local state).
+List<SSHKeyPair> decryptKeyPairs((String pem, String passphrase) args) {
+  return SSHKeyPair.fromPem(args.$1, args.$2);
+}
 
-  final keypairs = await compute(decryptKeyPairs, ['<pem text>', '<passphrase>']);
+void main() async {
+  final keypairs = await compute(decryptKeyPairs, ('<pem text>', '<passphrase>'));
 }
 ```
 

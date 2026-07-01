@@ -1,11 +1,11 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/http/http_date.dart';
 import 'package:dartssh2/src/http/http_exception.dart';
 import 'package:dartssh2/src/http/line_decoder.dart';
 import 'package:dartssh2/src/http/http_content_type.dart';
 import 'package:dartssh2/src/http/http_headers.dart';
-import 'package:dartssh2/src/http/http_date.dart';
 import 'package:dartssh2/src/socket/ssh_socket.dart';
 import 'package:dartssh2/src/ssh_client.dart';
 
@@ -412,9 +412,11 @@ class SSHHttpClientResponse {
 
     var inHeader = false;
     var inBody = false;
-    var finished = false;
     var contentLength = 0;
     var contentRead = 0;
+    var finished = false;
+
+    // Chunked transfer encoding state (RFC 7230 §4.1).
     var chunked = false;
     var expectingChunkSize = false;
     var expectingChunkData = false;
@@ -430,51 +432,61 @@ class SSHHttpClientResponse {
             final trimmed = line.trim();
             // Allow optional chunk extensions: <size>;(extension...)
             final semi = trimmed.indexOf(';');
-            final sizeStr = (semi >= 0 ? trimmed.substring(0, semi) : trimmed);
+            final sizeStr =
+                (semi >= 0 ? trimmed.substring(0, semi) : trimmed).trim();
             currentChunkSize = int.parse(sizeStr, radix: 16);
             if (currentChunkSize == 0) {
-              // Last-chunk; proceed to optional trailer headers terminated by blank line
+              // Last-chunk; proceed to optional trailer headers terminated
+              // by a blank line.
               expectingChunkSize = false;
               inTrailers = true;
               return;
             }
-            // Read exactly currentChunkSize bytes for chunk data
+            // Read exactly currentChunkSize bytes for chunk data.
             expectingChunkSize = false;
             expectingChunkData = true;
             decoder.expectedByteCount = currentChunkSize;
             return;
           }
           if (expectingChunkData) {
-            // Append chunk data (decoded as UTF-8 text)
+            // Append chunk data (decoded as UTF-8 text).
             body.write(line);
             expectingChunkData = false;
             expectingChunkCRLF = true;
-            // Consume trailing CRLF after chunk data
-            decoder.expectedByteCount = 2;
+            // The next line in the stream is the trailing CRLF/LF after chunk data.
+            // Leave decoder.expectedByteCount as -1 to scan until the next '\n'.
             return;
           }
           if (expectingChunkCRLF) {
-            // Ignore CRLF and expect next chunk size line
+            // Validate the chunk separator line: must be empty (CRLF or LF).
+            if (line.trim().isNotEmpty) {
+              throw FormatException(
+                'Invalid chunk separator after data: expected CRLF, got "$line"',
+              );
+            }
             expectingChunkCRLF = false;
             expectingChunkSize = true;
             return;
           }
           if (inTrailers) {
-            // Read trailers until blank line, then finish
+            // Read trailers until blank line, then finish.
             if (line.trim().isEmpty) {
               finished = true;
             } else {
-              // Store trailer headers if needed
+              // Validate trailer header: must contain a colon separator.
               final separator = line.indexOf(':');
-              if (separator > 0) {
-                final name = line.substring(0, separator).toLowerCase().trim();
-                final value = line.substring(separator + 1).trim();
-                headers.putIfAbsent(name, () => []).add(value);
+              if (separator <= 0) {
+                throw FormatException(
+                  'Invalid trailer header line: "$line" - no colon separator found',
+                );
               }
+              final name = line.substring(0, separator).toLowerCase().trim();
+              final value = line.substring(separator + 1).trim();
+              headers.putIfAbsent(name, () => []).add(value);
             }
             return;
           }
-          // Should not reach here under normal chunked flow
+          // Should not reach here under normal chunked flow.
           return;
         } else {
           body.write(line);
@@ -483,7 +495,7 @@ class SSHHttpClientResponse {
       } else if (inHeader) {
         if (normalizedLine.trim().isEmpty) {
           inBody = true;
-          // Decide body framing
+          // Decide body framing.
           final te = headers[SSHHttpHeaders.transferEncodingHeader]
               ?.join(',')
               .toLowerCase();
@@ -491,7 +503,7 @@ class SSHHttpClientResponse {
             chunked = true;
             expectingChunkSize = true;
           } else {
-            // Identity transfer; use Content-Length when provided
+            // Identity transfer; use Content-Length when provided.
             if (contentLength > 0) {
               decoder.expectedByteCount = contentLength;
             }
@@ -501,7 +513,8 @@ class SSHHttpClientResponse {
         final separator = normalizedLine.indexOf(':');
         if (separator <= 0) {
           throw FormatException(
-              'Invalid header line: "$normalizedLine" - no colon separator found');
+            'Invalid header line: "$normalizedLine" - no colon separator found',
+          );
         }
         final name =
             normalizedLine.substring(0, separator).toLowerCase().trim();
