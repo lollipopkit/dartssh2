@@ -458,7 +458,12 @@ class SSHHttpClientResponse {
             return;
           }
           if (expectingChunkCRLF) {
-            // Ignore CRLF and expect next chunk size line.
+            // Validate the chunk separator line: must be empty (CRLF or LF).
+            if (line.trim().isNotEmpty) {
+              throw FormatException(
+                'Invalid chunk separator after data: expected CRLF, got "$line"',
+              );
+            }
             expectingChunkCRLF = false;
             expectingChunkSize = true;
             return;
@@ -468,13 +473,16 @@ class SSHHttpClientResponse {
             if (line.trim().isEmpty) {
               finished = true;
             } else {
-              // Store trailer headers if needed.
+              // Validate trailer header: must contain a colon separator.
               final separator = line.indexOf(':');
-              if (separator > 0) {
-                final name = line.substring(0, separator).toLowerCase().trim();
-                final value = line.substring(separator + 1).trim();
-                headers.putIfAbsent(name, () => []).add(value);
+              if (separator <= 0) {
+                throw FormatException(
+                  'Invalid trailer header line: "$line" - no colon separator found',
+                );
               }
+              final name = line.substring(0, separator).toLowerCase().trim();
+              final value = line.substring(separator + 1).trim();
+              headers.putIfAbsent(name, () => []).add(value);
             }
             return;
           }

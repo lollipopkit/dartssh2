@@ -166,6 +166,37 @@ void main() {
 
       expect(response.body, 'hello');
     });
+
+    test('throws FormatException on invalid chunk separator', () async {
+      final socket = _FakeSocket([
+        'HTTP/1.1 200 OK\r\n',
+        'transfer-encoding: chunked\r\n',
+        '\r\n',
+        '5\r\nhello\r\n',
+        'NOT_CRLF\r\n0\r\n\r\n',
+      ]);
+
+      await expectLater(
+        SSHHttpClientResponse.from(socket),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('throws FormatException on invalid trailer header', () async {
+      final socket = _FakeSocket([
+        'HTTP/1.1 200 OK\r\n',
+        'transfer-encoding: chunked\r\n',
+        '\r\n',
+        '5\r\nhello\r\n0\r\n',
+        'invalid_trailer_without_colon\r\n',
+        '\r\n',
+      ]);
+
+      await expectLater(
+        SSHHttpClientResponse.from(socket),
+        throwsA(isA<FormatException>()),
+      );
+    });
   });
 
   group('SSHHttpClientResponse headers', () {

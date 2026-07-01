@@ -374,11 +374,13 @@ void main() async {
 Decrypting encrypted PEM files (especially those using secure key derivation functions like `bcrypt` with many rounds) is a CPU-intensive operation that can freeze the UI. In Flutter, you can offload this decryption to a background isolate using the [`compute`](https://api.flutter.dev/flutter/foundation/compute-constant.html) function:
 
 ```dart
-void main() async {
-  List<SSHKeyPair> decryptKeyPairs((String pem, String passphrase) args) {
-    return SSHKeyPair.fromPem(args.$1, args.$2);
-  }
+// The callback, message, and result must be sendable across isolates,
+// so it must be a top-level function (not a closure capturing local state).
+List<SSHKeyPair> decryptKeyPairs((String pem, String passphrase) args) {
+  return SSHKeyPair.fromPem(args.$1, args.$2);
+}
 
+void main() async {
   final keypairs = await compute(decryptKeyPairs, ('<pem text>', '<passphrase>'));
 }
 ```

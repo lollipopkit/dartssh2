@@ -1,6 +1,6 @@
 ## [2.20.0] - 2026-06-30
 - **BREAKING**: Bumped the minimum Dart SDK constraint to `3.0.0` [#23]. Thanks [@vicajilau].
-- **BREAKING**: Declared `OpenSSHKeyPair` as a `mixin class` to comply with Dart 3.0 class modifier rules [#23]. Thanks [@vicajilau].
+- **BREAKING**: Declared `OpenSSHKeyPair` as an `abstract mixin class` to comply with Dart 3.0 class modifier rules [#23]. Thanks [@vicajilau].
 - Offloaded all cryptographic key exchange (KEX) calculations to background isolates using `Isolate.run` on platforms that support it, preventing the Flutter main thread from blocking/freezing during connection [#23]. Thanks [@vicajilau].
 - Refactored internal key exchange isolate communication payloads (X25519, NIST Curves, DH) to use Dart 3.0 type-safe Records [#23]. Thanks [@vicajilau].
 

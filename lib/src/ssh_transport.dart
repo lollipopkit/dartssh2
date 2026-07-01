@@ -1533,7 +1533,7 @@ class SSHTransport {
         _kex = await SSHKexDH.group14Async();
         break;
       case SSHKexType.dh16Sha512:
-        _kex = SSHKexDH.group16();
+        _kex = await SSHKexDH.group16Async();
         break;
       case SSHKexType.dh1Sha1:
         _kex = await SSHKexDH.group1Async();

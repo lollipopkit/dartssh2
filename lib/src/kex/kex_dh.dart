@@ -64,6 +64,9 @@ class SSHKexDH implements SSHKex {
     required BigInt g,
     required int secretBits,
   }) async {
+    if (secretBits % 8 != 0) {
+      throw ArgumentError('secretBits must be a multiple of 8');
+    }
     final (x, e) = await sshCompute(_computeDHKeyPair, (p, g, secretBits));
     return SSHKexDH._(
       p: p,
@@ -80,6 +83,10 @@ class SSHKexDH implements SSHKex {
 
   static Future<SSHKexDH> group14Async() {
     return createAsync(p: _group14Prime, g: BigInt.from(2), secretBits: 224);
+  }
+
+  static Future<SSHKexDH> group16Async() {
+    return createAsync(p: _group16Prime, g: BigInt.from(2), secretBits: 256);
   }
 
   /// Compute the shared secret K
