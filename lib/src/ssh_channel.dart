@@ -31,6 +31,8 @@ class SSHChannelController {
 
   final void Function(SSHMessage) sendMessage;
 
+  final Future<void> Function()? onFlush;
+
   SSHChannel get channel => SSHChannel(this);
 
   SSHChannelController({
@@ -41,6 +43,7 @@ class SSHChannelController {
     required this.remoteInitialWindowSize,
     required this.remoteMaximumPacketSize,
     required this.sendMessage,
+    this.onFlush,
     this.printDebug,
   }) {
     if (remoteInitialWindowSize > 0) {
@@ -62,7 +65,12 @@ class SSHChannelController {
   /// A [StreamController] that accepts data from local end of the channel.
   final _localStream = StreamController<SSHChannelData>();
 
+  late final StreamSink<SSHChannelData> _localSink =
+      _SSHChannelSink(_localStream);
+
   late final _localStreamConsumer = SSHChannelDataConsumer(_localStream.stream);
+
+  SSHChannelData? _pendingUploadData;
 
   /// Handler of channel requests from the remote side.
   late var _requestHandler = _defaultRequestHandler;
@@ -82,6 +90,8 @@ class SSHChannelController {
   var _hasSentClose = false;
 
   final _done = Completer<void>();
+
+  final _flushBarriers = <Completer<void>>{};
 
   Future<bool> sendExec(String command) async {
     sendMessage(
@@ -233,6 +243,7 @@ class SSHChannelController {
   Future<void> close() async {
     if (_done.isCompleted) return;
 
+    _failFlushBarriers(StateError('Channel closed before flush completed'));
     _localStreamConsumer.cancel();
     _sendEOFIfNeeded();
 
@@ -250,6 +261,7 @@ class SSHChannelController {
   /// received.
   void destroy() {
     if (_done.isCompleted) return;
+    _failFlushBarriers(StateError('Channel destroyed before flush completed'));
     _remoteStream.close();
     _localStreamConsumer.cancel();
     _sendEOFIfNeeded();
@@ -409,12 +421,16 @@ class SSHChannelController {
 
   late final _uploadLoop = OnceSimultaneously(() async {
     while (true) {
-      if (_remoteWindow <= 0) {
-        return;
+      SSHChannelData? data;
+      if (_pendingUploadData != null) {
+        if (_remoteWindow <= 0) return;
+        data = _pendingUploadData;
+        _pendingUploadData = null;
+      } else {
+        final dataToRead =
+            _remoteWindow > 0 ? min(_remoteWindow, remoteMaximumPacketSize) : 1;
+        data = await _localStreamConsumer.read(dataToRead);
       }
-
-      final dataToRead = min(_remoteWindow, remoteMaximumPacketSize);
-      final data = await _localStreamConsumer.read(dataToRead);
 
       if (data == null) {
         _sendEOFIfNeeded();
@@ -422,6 +438,19 @@ class SSHChannelController {
         if (_remoteStream.isClosed) {
           close();
         }
+        return;
+      }
+
+      if (data is _SSHChannelFlushBarrier) {
+        _flushBarriers.remove(data.completer);
+        if (!data.completer.isCompleted) {
+          data.completer.complete();
+        }
+        continue;
+      }
+
+      if (_remoteWindow <= 0) {
+        _pendingUploadData = data;
         return;
       }
 
@@ -447,6 +476,26 @@ class SSHChannelController {
       _remoteWindow -= data.bytes.length;
     }
   });
+
+  Future<void> flush() async {
+    if (!_done.isCompleted) {
+      final barrier = Completer<void>();
+      _flushBarriers.add(barrier);
+      _localStream.add(_SSHChannelFlushBarrier(barrier));
+      _uploadLoop.activate();
+      await barrier.future;
+    }
+    await onFlush?.call();
+  }
+
+  void _failFlushBarriers(Object error) {
+    for (final barrier in _flushBarriers) {
+      if (!barrier.isCompleted) {
+        barrier.completeError(error, StackTrace.current);
+      }
+    }
+    _flushBarriers.clear();
+  }
 }
 
 class SSHChannel {
@@ -464,7 +513,7 @@ class SSHChannel {
 
   /// A [StreamSink] that sends data to the remote side. Chucks must be
   /// equal to or less than [maximumPacketSize].
-  StreamSink<SSHChannelData> get sink => _controller._localStream.sink;
+  StreamSink<SSHChannelData> get sink => _controller._localSink;
 
   Future<void> get done => _controller._done.future;
 
@@ -476,6 +525,9 @@ class SSHChannel {
   void addData(Uint8List data, {int? type}) {
     sink.add(SSHChannelData(data, type: type));
   }
+
+  /// Force flush any buffered outgoing data on this channel to the socket.
+  Future<void> flush() => _controller.flush();
 
   void setRequestHandler(SSHChannelRequestHandler handler) {
     _controller._requestHandler = handler;
@@ -545,6 +597,41 @@ class SSHChannelData {
   bool get isExtendedData => type != null;
 
   SSHChannelData(this.bytes, {this.type});
+}
+
+class _SSHChannelFlushBarrier extends SSHChannelData {
+  _SSHChannelFlushBarrier(this.completer) : super(Uint8List(0));
+
+  final Completer<void> completer;
+}
+
+class _SSHChannelSink implements StreamSink<SSHChannelData> {
+  _SSHChannelSink(this._controller);
+
+  final StreamController<SSHChannelData> _controller;
+
+  @override
+  void add(SSHChannelData data) {
+    _controller.add(data);
+  }
+
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) {
+    _controller.addError(error, stackTrace);
+  }
+
+  @override
+  Future<void> addStream(Stream<SSHChannelData> stream) async {
+    await for (final data in stream) {
+      add(data);
+    }
+  }
+
+  @override
+  Future<void> close() => _controller.close();
+
+  @override
+  Future<void> get done => _controller.done;
 }
 
 class SSHChannelExtendedDataType {

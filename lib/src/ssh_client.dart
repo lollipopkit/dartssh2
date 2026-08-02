@@ -125,11 +125,12 @@ class SSHRunResult {
 }
 
 class SSHClient {
-  /// RFC 4252 recommended authentication timeout period
+  /// Opt-in RFC 4252 authentication timeout preset. This is not applied
+  /// automatically; pass it as [authTimeout] to enable it.
   static const Duration defaultAuthTimeout = Duration(minutes: 10);
 
-  /// Default handshake timeout. Separates transport handshake timeout from
-  /// authentication timeout for better robustness.
+  /// Opt-in handshake timeout preset. This is not applied automatically; pass
+  /// it as [handshakeTimeout] to enable it.
   static const Duration defaultHandshakeTimeout = Duration(seconds: 30);
 
   /// RFC 4252 recommended maximum authentication attempts per session
@@ -203,13 +204,15 @@ class SSHClient {
   /// Username of clinet host used for hostbased authentication.
   final String? userNameOnClientHost;
 
-  /// Auth timeout, 10m by default.
-  final Duration authTimeout;
+  /// Maximum time to wait for the SSH transport handshake to complete. This is
+  /// null unless explicitly provided; [defaultHandshakeTimeout] is an opt-in
+  /// preset.
+  final Duration? handshakeTimeout;
 
-  /// Handshake timeout, 30s by default. This only covers the SSH transport
-  /// handshake (version exchange, KEX, host key verification, NEWKEYS), and is
-  /// independent from [authTimeout].
-  final Duration handshakeTimeout;
+  /// Maximum time to wait for authentication after the transport is ready.
+  /// This is null unless explicitly provided; [defaultAuthTimeout] is an
+  /// opt-in preset.
+  final Duration? authTimeout;
 
   /// Max auth attempts, 20 by default.
   final int maxAuthAttempts;
@@ -250,12 +253,8 @@ class SSHClient {
     this.onUserauthBanner,
     this.onAuthenticated,
     this.keepAliveInterval = const Duration(seconds: 10),
-
-    /// Authentication timeout period. RFC 4252 recommends 10 minutes.
-    this.authTimeout = defaultAuthTimeout,
-
-    /// Handshake timeout period. Defaults to 30s.
-    this.handshakeTimeout = defaultHandshakeTimeout,
+    this.handshakeTimeout,
+    this.authTimeout,
 
     /// Maximum authentication attempts. RFC 4252 recommends 20 attempts.
     this.maxAuthAttempts = defaultMaxAuthAttempts,
@@ -293,16 +292,14 @@ class SSHClient {
       _keyPairsLeft.addAll(identities!);
     }
 
-    // 初始化 hostbased 密钥队列
     if (hostbasedIdentities != null) {
       _hostbasedKeyPairsLeft.addAll(hostbasedIdentities!);
     }
 
-    // 添加认证超时定时器
-    _authTimeoutTimer = Timer(authTimeout, _onAuthTimeout);
-
-    // 添加握手超时定时器（与认证超时分离）
-    _handshakeTimeoutTimer = Timer(handshakeTimeout, _onHandshakeTimeout);
+    final handshakeTimeout = this.handshakeTimeout;
+    if (handshakeTimeout != null) {
+      _handshakeTimeoutTimer = Timer(handshakeTimeout, _handleHandshakeTimeout);
+    }
   }
 
   static String _validateIdent(String ident) {
@@ -365,6 +362,8 @@ class SSHClient {
       : null;
 
   SSHAuthMethod? _currentAuthMethod;
+
+  var _transportReady = false;
 
   /// A [Future] that completes when the client has authenticated, or
   /// completes with an error if the client could not authenticate.
@@ -754,10 +753,15 @@ class SSHClient {
   /// Shutdown the entire SSH connection. Sessions and channels will also be
   /// closed immediately.
   void close() {
-    _authTimeoutTimer?.cancel();
     _handshakeTimeoutTimer?.cancel();
+    _authTimeoutTimer?.cancel();
     _closeChannels();
     _transport.close();
+  }
+
+  /// Force flush any buffered outgoing data to the socket.
+  Future<void> flush() async {
+    await _transport.flush();
   }
 
   /// Close all channels that are currently open.
@@ -772,9 +776,14 @@ class SSHClient {
 
   void _handleTransportReady() {
     printDebug?.call('SSHClient._onTransportReady');
-    // 握手完成，取消握手超时定时器
+    _transportReady = true;
     _handshakeTimeoutTimer?.cancel();
     _handshakeTimeoutTimer = null;
+
+    final authTimeout = this.authTimeout;
+    if (authTimeout != null) {
+      _authTimeoutTimer = Timer(authTimeout, _handleAuthTimeout);
+    }
     _requestAuthentication();
   }
 
@@ -829,17 +838,6 @@ class SSHClient {
     }
   }
 
-  void _onHandshakeTimeout() {
-    // 若在握手阶段一直未就绪，则返回握手超时错误并关闭连接
-    if (_authenticated.isCompleted) return;
-    final msg =
-        'Handshake timed out after ${handshakeTimeout.inSeconds} seconds.';
-    _authenticated.completeError(SSHHandshakeError(msg));
-    // 认证阶段不会开始，取消其定时器以避免误触发
-    _authTimeoutTimer?.cancel();
-    _transport.closeWithError(SSHHandshakeError(msg));
-  }
-
   void _handlePacket(Uint8List payload) {
     try {
       _dispatchMessage(payload);
@@ -851,6 +849,21 @@ class SSHClient {
   /// Handles a raw SSH packet. This method is only exposed for testing purposes.
   @visibleForTesting
   void handlePacket(Uint8List packet) => _handlePacket(packet);
+
+  @visibleForTesting
+  SSHChannelController acceptChannelForTesting({
+    required SSHChannelId localChannelId,
+    required SSHChannelId remoteChannelId,
+    required int remoteInitialWindowSize,
+    required int remoteMaximumPacketSize,
+  }) {
+    return _acceptChannel(
+      localChannelId: localChannelId,
+      remoteChannelId: remoteChannelId,
+      remoteInitialWindowSize: remoteInitialWindowSize,
+      remoteMaximumPacketSize: remoteMaximumPacketSize,
+    );
+  }
 
   void _sendMessage(SSHMessage message) {
     printTrace?.call('-> $socket: $message');
@@ -928,9 +941,28 @@ class SSHClient {
     printTrace?.call('<- $socket: SSH_Message_Userauth_Success');
     printDebug?.call('SSHClient._handleUserauthSuccess');
     _authTimeoutTimer?.cancel();
+    _authTimeoutTimer = null;
     _authenticated.complete();
     onAuthenticated?.call();
     _keepAlive?.start();
+  }
+
+  void _handleHandshakeTimeout() {
+    if (_authenticated.isCompleted || _transportReady) return;
+
+    _handshakeTimeoutTimer = null;
+    final error = SSHHandshakeError('Handshake timed out');
+    _authenticated.completeError(error, StackTrace.current);
+  }
+
+  void _handleAuthTimeout() {
+    if (_authenticated.isCompleted) return;
+
+    _authTimeoutTimer = null;
+    _authenticated.completeError(
+      SSHAuthAbortError('Authentication timed out'),
+      StackTrace.current,
+    );
   }
 
   void _handleUserauthFailure(Uint8List payload) {
@@ -1677,6 +1709,7 @@ class SSHClient {
       remoteInitialWindowSize: remoteInitialWindowSize,
       remoteMaximumPacketSize: remoteMaximumPacketSize,
       sendMessage: _sendMessage,
+      onFlush: flush,
       printDebug: printDebug,
     );
 
@@ -1702,32 +1735,6 @@ class SSHClient {
     }
     final replyCompleter = _channelOpenReplyWaiters.remove(id)!;
     replyCompleter.complete(message);
-  }
-
-  void _onAuthTimeout() {
-    if (!_authenticated.isCompleted) {
-      final attemptedMethods = <String>[];
-
-      if (_currentAuthMethod != null) {
-        attemptedMethods.add(_currentAuthMethod!.name);
-      }
-
-      var timeoutMessage =
-          'Authentication timed out after ${authTimeout.inSeconds} seconds.';
-
-      if (_authAttempts > 0) {
-        timeoutMessage += ' Made $_authAttempts authentication attempts.';
-
-        if (attemptedMethods.isNotEmpty) {
-          timeoutMessage += ' Methods tried: ${attemptedMethods.join(', ')}';
-        }
-      } else {
-        timeoutMessage += ' No authentication attempts were made.';
-      }
-
-      _authenticated.completeError(SSHAuthAbortError(timeoutMessage));
-      close();
-    }
   }
 }
 

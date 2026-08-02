@@ -46,6 +46,9 @@ class _FakeSocket implements SSHSocket {
   Future<void> get done => _controller.done;
 
   @override
+  Future<void> flush() async {}
+
+  @override
   StreamSink<List<int>> get sink => _NullSink();
 
   @override

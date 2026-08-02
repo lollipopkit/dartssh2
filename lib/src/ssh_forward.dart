@@ -46,13 +46,27 @@ class SSHForwardChannel implements SSHSocket {
   final SSHChannel _channel;
 
   SSHForwardChannel(this._channel) {
-    _sinkController.stream
-        .map((data) => data is Uint8List ? data : Uint8List.fromList(data))
-        .map((data) => SSHChannelData(data))
-        .pipe(_channel.sink);
+    _sinkController.stream.listen(
+      (event) {
+        if (event is _SSHForwardData) {
+          final data = event.data is Uint8List
+              ? event.data as Uint8List
+              : Uint8List.fromList(event.data);
+          _channel.sink.add(SSHChannelData(data));
+          return;
+        }
+
+        final barrier = event as _SSHForwardFlushBarrier;
+        unawaited(_completeFlushBarrier(barrier.completer));
+      },
+      onError: _channel.sink.addError,
+      onDone: _channel.sink.close,
+    );
   }
 
-  final _sinkController = StreamController<List<int>>();
+  final _sinkController = StreamController<_SSHForwardUploadEvent>();
+
+  late final StreamSink<List<int>> _sink = _SSHForwardSink(_sinkController);
 
   /// Data received from the remote host.
   @override
@@ -60,7 +74,7 @@ class SSHForwardChannel implements SSHSocket {
 
   /// Write to this sink to send data to the remote host.
   @override
-  StreamSink<List<int>> get sink => _sinkController.sink;
+  StreamSink<List<int>> get sink => _sink;
 
   /// Close our end of the channel. Returns a future that waits for the
   /// other side to close.
@@ -76,6 +90,66 @@ class SSHForwardChannel implements SSHSocket {
   void destroy() {
     _channel.destroy();
   }
+
+  /// Force flush any buffered outgoing data.
+  @override
+  Future<void> flush() async {
+    final barrier = Completer<void>();
+    _sinkController.add(_SSHForwardFlushBarrier(barrier));
+    await barrier.future;
+  }
+
+  Future<void> _completeFlushBarrier(Completer<void> barrier) async {
+    try {
+      await _channel.flush();
+      barrier.complete();
+    } catch (error, stackTrace) {
+      barrier.completeError(error, stackTrace);
+    }
+  }
+}
+
+sealed class _SSHForwardUploadEvent {}
+
+class _SSHForwardData extends _SSHForwardUploadEvent {
+  _SSHForwardData(this.data);
+
+  final List<int> data;
+}
+
+class _SSHForwardFlushBarrier extends _SSHForwardUploadEvent {
+  _SSHForwardFlushBarrier(this.completer);
+
+  final Completer<void> completer;
+}
+
+class _SSHForwardSink implements StreamSink<List<int>> {
+  _SSHForwardSink(this._controller);
+
+  final StreamController<_SSHForwardUploadEvent> _controller;
+
+  @override
+  void add(List<int> data) {
+    _controller.add(_SSHForwardData(data));
+  }
+
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) {
+    _controller.addError(error, stackTrace);
+  }
+
+  @override
+  Future<void> addStream(Stream<List<int>> stream) async {
+    await for (final data in stream) {
+      add(data);
+    }
+  }
+
+  @override
+  Future<void> close() => _controller.close();
+
+  @override
+  Future<void> get done => _controller.done;
 }
 
 class SSHX11Channel extends SSHForwardChannel {

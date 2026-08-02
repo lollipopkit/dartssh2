@@ -258,12 +258,24 @@ class SftpClient {
   }
 
   /// Close the sftp session.
-  void close() {
+  ///
+  /// This also closes the underlying SSH channel that the sftp subsystem runs
+  /// on. Without this the channel is leaked: every [SSHClient.sftp] call opens
+  /// a fresh session channel, so an application that opens an sftp session per
+  /// operation would accumulate open channels on the connection until the
+  /// server refuses further `CHANNEL_OPEN`s.
+  Future<void> close() async {
+    if (_done.isCompleted) return;
+    final error = SftpAbortError("Connection closed");
     for (var waiter in _replyWaiters.values) {
-      waiter.completeError(SftpAbortError("Connection closed"));
+      waiter.completeError(error);
     }
     _replyWaiters.clear();
+    if (!_handshake.isCompleted) {
+      _handshake.completeError(error, StackTrace.current);
+    }
     _done.complete();
+    await _channel.close();
   }
 
   void _closeError(Object error, [StackTrace? stackTrace]) {

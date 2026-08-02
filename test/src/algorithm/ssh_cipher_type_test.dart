@@ -105,9 +105,13 @@ void main() {
   test('Default values are set correctly', () {
     final algorithms = SSHAlgorithms();
 
+    expect(SSHKexType.x25519Rfc.name, 'curve25519-sha256');
+    expect(algorithms.kex.toNameList().first, 'curve25519-sha256');
+
     expect(
         algorithms.kex,
         equals([
+          SSHKexType.x25519Rfc,
           SSHKexType.x25519,
           SSHKexType.nistp521,
           SSHKexType.nistp384,

@@ -98,6 +98,37 @@ void main() {
       harness.dispose();
     });
 
+    test('close aborts a pending handshake', () async {
+      final harness = _SftpHarness();
+      await harness.nextOutgoingPacket();
+
+      final handshakeExpectation = expectLater(
+        harness.client.handshake,
+        throwsA(isA<SftpAbortError>()),
+      );
+      final closeFuture = harness.client.close();
+      harness.closeRemote();
+
+      await closeFuture;
+      await handshakeExpectation;
+      harness.dispose();
+    });
+
+    test('close closes the underlying channel', () async {
+      final harness = _SftpHarness();
+      await harness.nextOutgoingPacket();
+      harness.sendResponsePacket(SftpVersionPacket(3));
+      await harness.client.handshake;
+
+      final closeFuture = harness.client.close();
+      // The server acks the channel close, letting the teardown complete.
+      harness.closeRemote();
+      await closeFuture;
+
+      await expectLater(harness.channelDone, completes);
+      harness.dispose();
+    });
+
     test('request waiter is registered before packet is sent', () async {
       final harness = _SftpHarness();
       await harness.nextOutgoingPacket();
@@ -904,6 +935,14 @@ class _SftpHarness {
   }
 
   Future<Uint8List> nextOutgoingPacket() => _outgoing.stream.first;
+
+  Future<void> get channelDone => _controller.channel.done;
+
+  void closeRemote() {
+    _controller.handleMessage(
+      SSH_Message_Channel_Close(recipientChannel: _controller.localId),
+    );
+  }
 
   void respondDuringOutbound(SftpPacket Function(Uint8List payload) responder) {
     _outboundResponder = responder;

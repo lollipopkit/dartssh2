@@ -1,3 +1,30 @@
+## [2.22.5] - 2026-07-30
+- Exported `src/ssh_userauth.dart` in `lib/dartssh2.dart` to expose `SSHUserInfoRequest`, `SSHUserInfoPrompt`, `SSHAuthMethod`, and `SSHChangePasswordResponse` [#188]. Thanks [@vicajilau].
+
+## [2.22.4] - 2026-07-27
+- Advertised standard RFC 8731 key exchange name `curve25519-sha256` alongside legacy `curve25519-sha256@libssh.org` [#187]. Thanks [@nickn17].
+
+## [2.22.3] - 2026-07-20
+- Fixed an SSH channel leak in `SftpClient.close()` by closing the underlying SSH channel and returning `Future<void>` to allow awaiting channel teardown [#186]. Thanks [@keinstn].
+
+## [2.22.2] - 2026-07-15
+- Added `flush()` to `SSHSocket`, `SSHClient`, and `SSHChannel` to allow force flushing of buffered outgoing data [#183]. Thanks [@vicajilau].
+
+## [2.22.1] - 2026-07-13
+- Fixed a keepalive issue where overlapping pings could occur and caught errors during ping execution. Thanks [@vicajilau].
+
+## [2.22.0] - 2026-07-03
+- Added optional `handshakeTimeout` and `authTimeout` to `SSHClient` to limit connection negotiation and user authentication times [#182]. Thanks [@GT-610].
+
+## [2.21.1] - 2026-07-02
+- Fixed an `SSHTransport` busy-loop (100% CPU / ANR) that occurred when a partial packet remained in the read buffer [#179]. Thanks [@vicajilau].
+
+## [2.21.0] - 2026-07-01
+- Added `SSHSession.waitForExit({Duration? timeout})` to await remote process exit status with an optional timeout [#176]. Thanks [@GT-610].
+- Hardened SOCKS5 dynamic forwarding (half-close streaming, dialing guards, timeout cancellation, malformed UTF-8 decoding, and buffer limits) [#175]. Thanks [@GT-610].
+- Hardened SSH agent channel frame validation (rejecting empty or oversized frames) and fallback RSA signature type checks [#175]. Thanks [@GT-610].
+- Improved EC private key parsing with proper ASN.1 OID curve detection, public point derivation validation, and robust comments decoding [#175]. Thanks [@GT-610].
+
 ## [2.20.0] - 2026-06-30
 - **BREAKING**: Bumped the minimum Dart SDK constraint to `3.0.0` [#23]. Thanks [@vicajilau].
 - **BREAKING**: Declared `OpenSSHKeyPair` as an `abstract mixin class` to comply with Dart 3.0 class modifier rules [#23]. Thanks [@vicajilau].
@@ -253,7 +280,15 @@
 [#18]: https://github.com/TerminalStudio/dartssh2/issues/18
 [#17]: https://github.com/TerminalStudio/dartssh2/issues/17
 [#14]: https://github.com/TerminalStudio/dartssh2/pull/14
+[#175]: https://github.com/TerminalStudio/dartssh2/pull/175
+[#176]: https://github.com/TerminalStudio/dartssh2/pull/176
+[#179]: https://github.com/TerminalStudio/dartssh2/pull/179
+[#182]: https://github.com/TerminalStudio/dartssh2/pull/182
+[#183]: https://github.com/TerminalStudio/dartssh2/pull/183
+[#186]: https://github.com/TerminalStudio/dartssh2/pull/186
+[#187]: https://github.com/TerminalStudio/dartssh2/pull/187
 [#1]: https://github.com/TerminalStudio/dartssh/pull/1/files
+[#188]: https://github.com/TerminalStudio/dartssh2/issues/188
 
 [@linhanyu]: https://github.com/linhanyu
 [@Migarl]: https://github.com/Migarl
@@ -271,3 +306,4 @@
 [@Wackymax]: https://github.com/Wackymax
 [@gkc]: https://github.com/gkc
 [@vicajilau]: https://github.com/vicajilau
+[@GT-610]: https://github.com/GT-610

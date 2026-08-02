@@ -32,8 +32,17 @@ class SSHSession {
   /// be available on the [stdout] and [stderr] streams at this time.
   Future<void> get done => _channel.done;
 
+  /// The underlying SSH channel.
+  SSHChannel get channel => _channel;
+
   SSHSession(this._channel) {
     _channel.setRequestHandler(_handleRequest);
+
+    done.then((_) {
+      if (!_exitCompleter.isCompleted) {
+        _exitCompleter.complete(_exitCode);
+      }
+    });
 
     _channelDataSubscription = _channel.stream.listen(
       _handleChannelData,
@@ -50,6 +59,8 @@ class SSHSession {
   int? _exitCode;
 
   SSHSessionExitSignal? _exitSignal;
+
+  final _exitCompleter = Completer<int?>();
 
   late final StreamSubscription _channelDataSubscription;
 
@@ -69,6 +80,12 @@ class SSHSession {
   /// method that calls [stdin.add].
   void write(Uint8List data) {
     stdin.add(data);
+  }
+
+  /// Force flush any buffered stdin data to the remote process.
+  Future<void> flush() async {
+    await Future.microtask(() {});
+    await _channel.flush();
   }
 
   /// Inform remote process of the current window size.
@@ -103,37 +120,16 @@ class SSHSession {
     _channel.close();
   }
 
-  /// Wait for the remote process to exit. Returns the exit code of the remote
-  /// process, or null if the process has not yet exited.
-  Future<int?> waitForExit({Duration? timeout}) async {
-    final completer = Completer<int?>();
-
-    void checkExit() {
-      if (_exitCode != null && !completer.isCompleted) {
-        completer.complete(_exitCode);
-      }
-    }
-
-    // Check the exit code immediately
-    checkExit();
-
-    final subscription = done.asStream().listen((_) => checkExit());
-    Timer? timeoutTimer;
+  /// Waits for the remote process to report an exit status.
+  ///
+  /// Returns the exit status, or `null` if the process exited without reporting
+  /// one, was terminated by a signal, or [timeout] elapsed before it exited.
+  Future<int?> waitForExit({Duration? timeout}) {
+    Future<int?> wait = _exitCompleter.future;
     if (timeout != null) {
-      timeoutTimer = Timer(timeout, () {
-        subscription.cancel();
-        if (!completer.isCompleted) {
-          completer.complete(null);
-        }
-      });
+      wait = wait.timeout(timeout, onTimeout: () => null);
     }
-
-    completer.future.then((_) {
-      timeoutTimer?.cancel();
-      subscription.cancel();
-    });
-
-    return completer.future;
+    return wait;
   }
 
   /// Deliver [signal] to the remote process. Some implementations may not
@@ -146,6 +142,9 @@ class SSHSession {
     switch (request.requestType) {
       case SSHChannelRequestType.exitStatus:
         _exitCode = request.exitStatus!;
+        if (!_exitCompleter.isCompleted) {
+          _exitCompleter.complete(_exitCode);
+        }
         return true;
       case SSHChannelRequestType.exitSignal:
         _exitSignal = SSHSessionExitSignal(
@@ -154,6 +153,9 @@ class SSHSession {
           errorMessage: request.errorMessage!,
           languageTag: request.languageTag!,
         );
+        if (!_exitCompleter.isCompleted) {
+          _exitCompleter.complete(null);
+        }
         return true;
     }
     return false;

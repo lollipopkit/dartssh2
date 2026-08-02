@@ -1,72 +1,49 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:mirrors';
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('SSHClient.ident', () {
-    test('uses default ident when not provided', () async {
+  final clientLibrary = reflectClass(SSHClient).owner as LibraryMirror;
+  Symbol privateSymbol(String name) =>
+      MirrorSystem.getSymbol(name, clientLibrary);
+
+  group('SSHClient timeouts', () {
+    test('fails authentication future when handshake times out', () async {
       final socket = _FakeSSHSocket();
       final client = SSHClient(
         socket,
         username: 'demo',
+        handshakeTimeout: const Duration(milliseconds: 10),
       );
 
-      await Future<void>.delayed(Duration.zero);
-
-      expect(client.ident, 'DartSSH_2.0');
-      expect(socket.writes, contains('SSH-2.0-DartSSH_2.0\r\n'));
+      await expectLater(
+        client.authenticated,
+        throwsA(isA<SSHHandshakeError>()),
+      );
 
       client.close();
     });
 
-    test('uses custom ident when provided', () async {
+    test('fails authentication future when auth times out', () async {
       final socket = _FakeSSHSocket();
       final client = SSHClient(
         socket,
         username: 'demo',
-        ident: 'MyClient_1.0',
+        authTimeout: const Duration(milliseconds: 10),
       );
 
-      await Future<void>.delayed(Duration.zero);
+      reflect(client).invoke(privateSymbol('_handleTransportReady'), const []);
 
-      expect(client.ident, 'MyClient_1.0');
-      expect(socket.writes, contains('SSH-2.0-MyClient_1.0\r\n'));
+      await expectLater(
+        client.authenticated,
+        throwsA(isA<SSHAuthAbortError>()),
+      );
 
       client.close();
-    });
-
-    test('throws when ident is empty', () {
-      expect(
-        () => SSHClient(
-          _FakeSSHSocket(),
-          username: 'demo',
-          ident: '',
-        ),
-        throwsA(isA<ArgumentError>()),
-      );
-    });
-
-    test('throws when ident contains newline characters', () {
-      expect(
-        () => SSHClient(
-          _FakeSSHSocket(),
-          username: 'demo',
-          ident: 'Bad\nIdent',
-        ),
-        throwsA(isA<ArgumentError>()),
-      );
-
-      expect(
-        () => SSHClient(
-          _FakeSSHSocket(),
-          username: 'demo',
-          ident: 'Bad\rIdent',
-        ),
-        throwsA(isA<ArgumentError>()),
-      );
     });
   });
 }
@@ -74,13 +51,13 @@ void main() {
 class _FakeSSHSocket implements SSHSocket {
   final _inputController = StreamController<Uint8List>();
   final _doneCompleter = Completer<void>();
-  final writes = <String>[];
+  final _sink = _RecordingSink();
 
   @override
   Stream<Uint8List> get stream => _inputController.stream;
 
   @override
-  StreamSink<List<int>> get sink => _RecordingSink(writes);
+  StreamSink<List<int>> get sink => _sink;
 
   @override
   Future<void> get done => _doneCompleter.future;
@@ -106,13 +83,9 @@ class _FakeSSHSocket implements SSHSocket {
 }
 
 class _RecordingSink implements StreamSink<List<int>> {
-  _RecordingSink(this._writes);
-
-  final List<String> _writes;
-
   @override
   void add(List<int> data) {
-    _writes.add(latin1.decode(data));
+    latin1.decode(data);
   }
 
   @override

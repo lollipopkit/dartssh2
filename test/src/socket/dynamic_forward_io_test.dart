@@ -369,6 +369,69 @@ void main() {
       expect(dialedHosts[0], '192.168.1.2');
       expect(dialedHosts[1], contains(':'));
     });
+
+    test('closes remote sink when client EOF arrives during streaming',
+        () async {
+      late _DialedTunnel dialed;
+
+      final forward = await startDynamicForward(
+        bindHost: '127.0.0.1',
+        bindPort: 0,
+        options: const SSHDynamicForwardOptions(),
+        dial: (_, __) async {
+          dialed = _DialedTunnel.create();
+          return dialed.channel;
+        },
+      );
+
+      final client = await Socket.connect(forward.host, forward.port);
+      final incoming = client.asBroadcastStream();
+      addTearDown(() async {
+        await client.close();
+        await forward.close();
+        dialed.dispose();
+      });
+
+      await _sendGreeting(client, incoming);
+      final reply =
+          await _sendConnectDomain(client, incoming, 'example.com', 443);
+      expect(reply[1], 0x00);
+
+      // Send some data then close client side (half-close / EOF).
+      client.add(utf8.encode('data'));
+      await client.close();
+      await dialed.remoteEof.timeout(const Duration(seconds: 1));
+    });
+
+    test('handles handshake buffer overflow gracefully', () async {
+      final forward = await startDynamicForward(
+        bindHost: '127.0.0.1',
+        bindPort: 0,
+        options: const SSHDynamicForwardOptions(),
+        dial: (_, __) async => _DialedTunnel.create().channel,
+      );
+      addTearDown(() => forward.close());
+
+      final client = await Socket.connect(forward.host, forward.port);
+      addTearDown(() => client.close());
+      final incoming = client.asBroadcastStream();
+      final clientDone = incoming.drain<void>();
+
+      // Send a valid greeting but then flood the handshake buffer beyond
+      // kMaxHandshakeSize (32768). The server should close the connection
+      // rather than keep buffering indefinitely.
+      await _sendGreeting(client, incoming);
+      final huge = Uint8List(33000);
+      client.add(huge);
+
+      // The overflow victim must be closed before the forward is reused.
+      await clientDone.timeout(const Duration(seconds: 1));
+
+      // Verify the forward still accepts new connections.
+      final client2 = await Socket.connect(forward.host, forward.port);
+      addTearDown(() => client2.close());
+      await _sendGreeting(client2, client2.asBroadcastStream());
+    });
   });
 }
 
@@ -436,14 +499,21 @@ Future<Uint8List> _readAtLeast(
 }
 
 class _DialedTunnel {
-  _DialedTunnel._(this.channel, this._controller, this.sentToRemote);
+  _DialedTunnel._(
+    this.channel,
+    this._controller,
+    this.sentToRemote,
+    this.remoteEof,
+  );
 
   final SSHForwardChannel channel;
   final SSHChannelController _controller;
   final List<int> sentToRemote;
+  final Future<void> remoteEof;
 
   factory _DialedTunnel.create() {
     final sentToRemote = <int>[];
+    final remoteEof = Completer<void>();
 
     final controller = SSHChannelController(
       localId: 1,
@@ -455,6 +525,9 @@ class _DialedTunnel {
       sendMessage: (message) {
         if (message is SSH_Message_Channel_Data) {
           sentToRemote.addAll(message.data);
+        } else if (message is SSH_Message_Channel_EOF &&
+            !remoteEof.isCompleted) {
+          remoteEof.complete();
         }
       },
     );
@@ -463,6 +536,7 @@ class _DialedTunnel {
       SSHForwardChannel(controller.channel),
       controller,
       sentToRemote,
+      remoteEof.future,
     );
   }
 

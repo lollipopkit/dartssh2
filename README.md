@@ -162,6 +162,24 @@ void main() async {
 
 `ident` defaults to `DartSSH_2.0`.
 
+### Configure handshake and authentication timeouts
+
+You can specify optional timeouts for the transport handshake and user authentication:
+
+```dart
+void main() async {
+  final client = SSHClient(
+    await SSHSocket.connect('localhost', 22),
+    username: '<username>',
+    onPasswordRequest: () => '<password>',
+    handshakeTimeout: const Duration(seconds: 15),
+    authTimeout: const Duration(seconds: 15),
+  );
+}
+```
+
+By default, these parameters are `null` (no timeout is enforced). Without these timeouts, the connection or authentication process could hang indefinitely if the remote server becomes unresponsive.
+
 ### Spawn a shell on remote host
 
 ```dart
@@ -276,6 +294,25 @@ void main() async {
 ```
 
 Processes killed by signals do not have an exit code, instead they have an exit signal property.
+
+**Waiting for exit status with a timeout**
+
+Alternatively, you can wait for the remote process to report its exit status or exit signal with an optional timeout using `session.waitForExit()`:
+
+```dart
+void main() async {
+  final session = await client.execute('sleep 5');
+
+  // Wait for the exit status to be reported (or up to 10 seconds).
+  final exitCode = await session.waitForExit(timeout: Duration(seconds: 10));
+
+  if (exitCode != null) {
+    print('Process exited with code: $exitCode');
+  } else {
+    print('Process timed out or was terminated by a signal');
+  }
+}
+```
 
 ### Forward connections on local port 8080 to the server
 
