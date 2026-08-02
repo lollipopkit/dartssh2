@@ -92,6 +92,7 @@ class SSHAlgorithms {
     // Prefer modern KEX first; move legacy SHA-1/group1 variants to the end
     // as fallback-only to improve security defaults.
     this.kex = const [
+      SSHKexType.x25519Rfc,
       SSHKexType.x25519,
       SSHKexType.nistp521,
       SSHKexType.nistp384,

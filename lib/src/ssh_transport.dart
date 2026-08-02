@@ -126,6 +126,9 @@ class SSHTransport {
   /// Guards asynchronous packet processing to preserve message order.
   var _isProcessingData = false;
 
+  /// Tracks whether new socket data was received since packet processing started.
+  var _hasNewData = false;
+
   /// Identification string sent by us without trailing \r\n. For example,
   /// "SSH-2.0-DartSSH_2.0".
   String get _localVersion => 'SSH-2.0-$version';
@@ -448,6 +451,12 @@ class SSHTransport {
     socket.destroy();
   }
 
+  /// Force flush any buffered outgoing data to the socket.
+  Future<void> flush() async {
+    await socket.flush();
+  }
+
+  /// Subscribes to the underlying socket stream to handle incoming data and status events.
   void _initSocket() {
     _socketSubscription = socket.stream.listen(
       _onSocketData,
@@ -460,6 +469,7 @@ class SSHTransport {
 
   void _onSocketData(Uint8List data) {
     _buffer.add(data);
+    _hasNewData = true;
     _scheduleProcessData();
   }
 
@@ -479,6 +489,8 @@ class SSHTransport {
     }
 
     _isProcessingData = true;
+    final lengthBefore = _buffer.length;
+    _hasNewData = false;
 
     _processDataAsync().catchError((error, stackTrace) {
       if (error is SSHError) {
@@ -489,7 +501,9 @@ class SSHTransport {
     }).whenComplete(() {
       _isProcessingData = false;
       if (_buffer.isNotEmpty && !isClosed) {
-        _scheduleProcessData();
+        if (_hasNewData || _buffer.length < lengthBefore) {
+          _scheduleProcessData();
+        }
       }
     });
   }
@@ -1517,6 +1531,7 @@ class SSHTransport {
 
     switch (_kexType) {
       case SSHKexType.x25519:
+      case SSHKexType.x25519Rfc:
         _kex = await SSHKexX25519.createAsync();
         break;
       case SSHKexType.nistp256:

@@ -171,9 +171,8 @@ class _SocksConnection {
       return;
     }
 
-    _buffer.add(chunk);
-
     try {
+      _buffer.add(chunk);
       await _consumeHandshake();
     } catch (_) {
       await close();
