@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:mirrors';
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
+import 'package:dartssh2/src/message/base.dart';
 import 'package:dartssh2/src/ssh_channel.dart';
 import 'package:test/test.dart';
 
@@ -42,21 +42,12 @@ void main() {
       await client.flush();
       expect(socket.flushCount, 1);
 
-      final clientLibrary = reflectClass(SSHClient).owner as LibraryMirror;
-      Symbol privateSymbol(String name) =>
-          MirrorSystem.getSymbol(name, clientLibrary);
-
-      // Invoke _acceptChannel using reflection to verify onFlush setup.
-      final channelController = reflect(client).invoke(
-        privateSymbol('_acceptChannel'),
-        [],
-        {
-          #localChannelId: 1,
-          #remoteChannelId: 2,
-          #remoteInitialWindowSize: 1024,
-          #remoteMaximumPacketSize: 1024,
-        },
-      ).reflectee as SSHChannelController;
+      final channelController = client.acceptChannelForTesting(
+        localChannelId: 1,
+        remoteChannelId: 2,
+        remoteInitialWindowSize: 1024,
+        remoteMaximumPacketSize: 1024,
+      );
 
       expect(channelController.onFlush, isNotNull);
       await channelController.flush();
@@ -112,22 +103,30 @@ void main() {
   });
 
   group('SSHForwardChannel.flush', () {
-    test('delegates to channel.flush', () async {
+    test('flushes after data exactly exhausts the remote window', () async {
       var flushed = false;
+      final sentData = <int>[];
       final controller = SSHChannelController(
         localId: 1,
         localMaximumPacketSize: 1024,
         localInitialWindowSize: 1024,
         remoteId: 2,
-        remoteMaximumPacketSize: 1024,
-        remoteInitialWindowSize: 1024,
-        sendMessage: (msg) {},
+        remoteMaximumPacketSize: 3,
+        remoteInitialWindowSize: 3,
+        sendMessage: (message) {
+          if (message is SSH_Message_Channel_Data) {
+            sentData.addAll(message.data);
+          }
+        },
         onFlush: () async {
           flushed = true;
         },
       );
       final forwardChannel = SSHForwardChannel(controller.channel);
-      await forwardChannel.flush();
+      forwardChannel.sink.add([1, 2, 3]);
+      await forwardChannel.flush().timeout(const Duration(seconds: 1));
+
+      expect(sentData, [1, 2, 3]);
       expect(flushed, isTrue);
     });
   });

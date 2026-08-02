@@ -318,7 +318,7 @@ void main() {
       ),
     );
 
-    await Future<void>.delayed(Duration.zero);
+    await controller.channel.done;
 
     // The channel should have been destroyed, no requests processed.
     expect(handler.requests, isEmpty);
@@ -355,7 +355,7 @@ void main() {
       ),
     );
 
-    await Future<void>.delayed(Duration.zero);
+    await controller.channel.done;
 
     expect(handler.requests, isEmpty);
 

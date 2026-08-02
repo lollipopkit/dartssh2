@@ -282,6 +282,11 @@
 [#14]: https://github.com/TerminalStudio/dartssh2/pull/14
 [#175]: https://github.com/TerminalStudio/dartssh2/pull/175
 [#176]: https://github.com/TerminalStudio/dartssh2/pull/176
+[#179]: https://github.com/TerminalStudio/dartssh2/pull/179
+[#182]: https://github.com/TerminalStudio/dartssh2/pull/182
+[#183]: https://github.com/TerminalStudio/dartssh2/pull/183
+[#186]: https://github.com/TerminalStudio/dartssh2/pull/186
+[#187]: https://github.com/TerminalStudio/dartssh2/pull/187
 [#1]: https://github.com/TerminalStudio/dartssh/pull/1/files
 [#188]: https://github.com/TerminalStudio/dartssh2/issues/188
 

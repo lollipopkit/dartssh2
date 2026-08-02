@@ -125,11 +125,12 @@ class SSHRunResult {
 }
 
 class SSHClient {
-  /// RFC 4252 recommended authentication timeout period
+  /// Opt-in RFC 4252 authentication timeout preset. This is not applied
+  /// automatically; pass it as [authTimeout] to enable it.
   static const Duration defaultAuthTimeout = Duration(minutes: 10);
 
-  /// Default handshake timeout. Separates transport handshake timeout from
-  /// authentication timeout for better robustness.
+  /// Opt-in handshake timeout preset. This is not applied automatically; pass
+  /// it as [handshakeTimeout] to enable it.
   static const Duration defaultHandshakeTimeout = Duration(seconds: 30);
 
   /// RFC 4252 recommended maximum authentication attempts per session
@@ -203,10 +204,14 @@ class SSHClient {
   /// Username of clinet host used for hostbased authentication.
   final String? userNameOnClientHost;
 
-  /// Maximum time to wait for the SSH transport handshake to complete.
+  /// Maximum time to wait for the SSH transport handshake to complete. This is
+  /// null unless explicitly provided; [defaultHandshakeTimeout] is an opt-in
+  /// preset.
   final Duration? handshakeTimeout;
 
   /// Maximum time to wait for authentication after the transport is ready.
+  /// This is null unless explicitly provided; [defaultAuthTimeout] is an
+  /// opt-in preset.
   final Duration? authTimeout;
 
   /// Max auth attempts, 20 by default.
@@ -844,6 +849,21 @@ class SSHClient {
   /// Handles a raw SSH packet. This method is only exposed for testing purposes.
   @visibleForTesting
   void handlePacket(Uint8List packet) => _handlePacket(packet);
+
+  @visibleForTesting
+  SSHChannelController acceptChannelForTesting({
+    required SSHChannelId localChannelId,
+    required SSHChannelId remoteChannelId,
+    required int remoteInitialWindowSize,
+    required int remoteMaximumPacketSize,
+  }) {
+    return _acceptChannel(
+      localChannelId: localChannelId,
+      remoteChannelId: remoteChannelId,
+      remoteInitialWindowSize: remoteInitialWindowSize,
+      remoteMaximumPacketSize: remoteMaximumPacketSize,
+    );
+  }
 
   void _sendMessage(SSHMessage message) {
     printTrace?.call('-> $socket: $message');

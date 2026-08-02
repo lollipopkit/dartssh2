@@ -128,9 +128,10 @@ String _getNameByCurve(ECDomainParameters curve) {
   late BigInt x;
   do {
     x = decodeBigIntWithSign(
-      1,
-      randomBytes((secretBits + 7) ~/ 8),
-    ) % curve.n;
+          1,
+          randomBytes((secretBits + 7) ~/ 8),
+        ) %
+        curve.n;
   } while (x == BigInt.zero);
 
   final c = curve.G * x;

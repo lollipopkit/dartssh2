@@ -98,6 +98,22 @@ void main() {
       harness.dispose();
     });
 
+    test('close aborts a pending handshake', () async {
+      final harness = _SftpHarness();
+      await harness.nextOutgoingPacket();
+
+      final handshakeExpectation = expectLater(
+        harness.client.handshake,
+        throwsA(isA<SftpAbortError>()),
+      );
+      final closeFuture = harness.client.close();
+      harness.closeRemote();
+
+      await closeFuture;
+      await handshakeExpectation;
+      harness.dispose();
+    });
+
     test('close closes the underlying channel', () async {
       final harness = _SftpHarness();
       await harness.nextOutgoingPacket();

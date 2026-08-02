@@ -73,11 +73,27 @@ void main() {
         username: 'demo',
       );
 
-      // Send the version banner followed by some extra data in one go.
-      socket.addIncoming('SSH-2.0-OpenSSH_3.6.1p2\r\nSSH-2.0-SecondLine\r\n');
+      // Send the version banner followed by an invalid packet length in the
+      // same chunk. Processing must continue into the queued remainder and
+      // surface the packet error instead of stopping after the banner.
+      socket.addRawIncoming(
+        Uint8List.fromList([
+          ...latin1.encode('SSH-2.0-OpenSSH_3.6.1p2\r\n'),
+          0,
+          0,
+          0,
+          0,
+        ]),
+      );
 
-      // Pump until the client processes the first version.
-      await _pumpUntil(() => client.remoteVersion != null);
+      await expectLater(
+        client.authenticated,
+        throwsA(
+          predicate((error) {
+            return error is SSHAuthAbortError && error.reason is SSHPacketError;
+          }),
+        ),
+      );
 
       expect(client.remoteVersion, 'SSH-2.0-OpenSSH_3.6.1p2');
 
