@@ -265,8 +265,12 @@ class SSHTransport {
       if (isChaCha) {
         final encKey = _localChaChaEncKey!;
         final lenKey = _localChaChaLenKey!;
-        final packetAlign = max(SSHPacket.minAlign, 8);
-        final packet = SSHPacket.pack(data, align: packetAlign);
+        // The 4-byte length field is encrypted separately under K_1, so it
+        // does not take part in the body's block alignment — unlike the
+        // non-AEAD path, where `SSHPacket.pack` folds those 4 bytes in via
+        // `headerLength`. Getting this wrong makes sshd report
+        // "padding error: need N block 8 mod 4".
+        final packet = _packChaChaPacket(data);
         final out =
             _encryptChaChaOpenSSH(packet, encKey, lenKey, _localPacketSN.value);
         _bytesSent += packet.length + localCipherType!.aeadTagSize;
@@ -877,6 +881,23 @@ class SSHTransport {
     }
   }
 
+  /// Builds `length(4) || padding_length(1) || payload || padding` for
+  /// chacha20-poly1305, aligning only the part that the payload cipher covers.
+  Uint8List _packChaChaPacket(Uint8List payload) {
+    const align = SSHPacket.minAlign;
+    final paddingLength = _alignedPaddingLength(payload.length, align);
+    final packetLength = 1 + payload.length + paddingLength;
+
+    final packet = Uint8List(4 + packetLength);
+    ByteData.sublistView(packet, 0, 4).setUint32(0, packetLength);
+    packet[4] = paddingLength;
+    packet.setRange(5, 5 + payload.length, payload);
+    for (var i = 0; i < paddingLength; i++) {
+      packet[5 + payload.length + i] = _paddingRandom.nextInt(256);
+    }
+    return packet;
+  }
+
   /// Encrypt packet using OpenSSH chacha20-poly1305 construction.
   /// Input [packet] is 4-byte length (plaintext) + body (padding_len|payload|padding).
   /// Output: enc_len(4) || enc_body || tag(16)
@@ -886,38 +907,34 @@ class SSHTransport {
     final lenBytes = Uint8List.sublistView(packet, 0, 4);
     final body = Uint8List.sublistView(packet, 4);
 
-    // Nonce per OpenSSH: 0x00000000 || uint64_le(seq) (upper 32 bits zero)
+    // Nonce per OpenSSH: uint64 big-endian sequence number (POKE_U64).
     final nonce = _composeChaChaNonce(seq);
 
-    // 1) Encrypt 4-byte length using second key (counter=0)
+    // 1) Encrypt 4-byte length with K_1 (counter=0)
     final encLen = Uint8List(4);
-    final chachaLen = ChaCha7539Engine();
+    final chachaLen = ChaCha20Engine();
     chachaLen.init(true, ParametersWithIV(KeyParameter(lenKey), nonce));
     chachaLen.processBytes(lenBytes, 0, 4, encLen, 0);
 
-    // 2) Derive one-time Poly1305 key from first 32 bytes of keystream (block 0)
-    final chachaForPoly = ChaCha7539Engine();
-    chachaForPoly.init(true, ParametersWithIV(KeyParameter(encKey), nonce));
+    // 2) Derive one-time Poly1305 key from first 32 bytes of the K_2
+    //    keystream (counter=0), then continue the same stream for the body,
+    //    which leaves it at counter=1 exactly as OpenSSH re-seeks to.
+    final chachaPayload = ChaCha20Engine();
+    chachaPayload.init(true, ParametersWithIV(KeyParameter(encKey), nonce));
     final polyBlock = Uint8List(64);
-    chachaForPoly.processBytes(polyBlock, 0, 64, polyBlock, 0);
+    chachaPayload.processBytes(polyBlock, 0, 64, polyBlock, 0);
     final polyKey = Uint8List.sublistView(polyBlock, 0, 32);
 
-    // 3) Encrypt body using chacha(encKey) starting from block 1
-    final chachaPayload = ChaCha7539Engine();
-    chachaPayload.init(true, ParametersWithIV(KeyParameter(encKey), nonce));
-    if (body.isNotEmpty) {
-      final discard = Uint8List(64); // advance one block
-      chachaPayload.processBytes(discard, 0, 64, discard, 0);
-    }
+    // 3) Encrypt body, continuing from counter=1
     final encBody = Uint8List(body.length);
     chachaPayload.processBytes(body, 0, body.length, encBody, 0);
 
-    // 4) Poly1305 over: enc_len || pad16 || enc_body || pad16 || len(aad) LE64 || len(cipher) LE64
+    // 4) Poly1305 over enc_len || enc_body. OpenSSH authenticates the raw
+    //    concatenation — it does not use the RFC 8439 AEAD construction, so
+    //    there is no 16-byte padding and no trailing length block.
     final mac = Poly1305()..init(KeyParameter(polyKey));
-    _poly1305UpdatePadded(mac, encLen);
-    _poly1305UpdatePadded(mac, encBody);
-    mac.updateAll(_le64(encLen.length));
-    mac.updateAll(_le64(encBody.length));
+    mac.updateAll(encLen);
+    mac.updateAll(encBody);
     final tag = mac.finish();
 
     final out = BytesBuilder(copy: false)
@@ -944,7 +961,7 @@ class SSHTransport {
     // Peek and decrypt 4-byte length
     final encLenBytes = _buffer.view(0, 4);
     final decLen = Uint8List(4);
-    final chachaLen = ChaCha7539Engine();
+    final chachaLen = ChaCha20Engine();
     chachaLen.init(false, ParametersWithIV(KeyParameter(lenKey), nonce));
     chachaLen.processBytes(encLenBytes, 0, 4, decLen, 0);
 
@@ -963,31 +980,24 @@ class SSHTransport {
     final encBody = _buffer.consume(len);
     final tag = _buffer.consume(tagSize);
 
-    // Derive one-time Poly1305 key (from block 0)
-    final chachaForPoly = ChaCha7539Engine();
-    chachaForPoly.init(false, ParametersWithIV(KeyParameter(encKey), nonce));
+    // Derive the one-time Poly1305 key from the K_2 keystream at counter=0,
+    // leaving the same engine positioned at counter=1 for the body.
+    final chachaPayload = ChaCha20Engine();
+    chachaPayload.init(false, ParametersWithIV(KeyParameter(encKey), nonce));
     final polyBlock = Uint8List(64);
-    chachaForPoly.processBytes(polyBlock, 0, 64, polyBlock, 0);
+    chachaPayload.processBytes(polyBlock, 0, 64, polyBlock, 0);
     final polyKey = Uint8List.sublistView(polyBlock, 0, 32);
 
-    // Verify MAC
+    // Verify MAC over the raw enc_len || enc_body, per OpenSSH.
     final mac = Poly1305()..init(KeyParameter(polyKey));
-    _poly1305UpdatePadded(mac, encLen);
-    _poly1305UpdatePadded(mac, encBody);
-    mac.updateAll(_le64(encLen.length));
-    mac.updateAll(_le64(encBody.length));
+    mac.updateAll(encLen);
+    mac.updateAll(encBody);
     final expectedTag = mac.finish();
     if (!constantTimeEquals(expectedTag, tag)) {
       throw SSHPacketError('AEAD decrypt/authentication failed: tag mismatch');
     }
 
-    // Decrypt body using chacha(encKey) starting from block 1
-    final chachaPayload = ChaCha7539Engine();
-    chachaPayload.init(false, ParametersWithIV(KeyParameter(encKey), nonce));
-    if (encBody.isNotEmpty) {
-      final discard = Uint8List(64);
-      chachaPayload.processBytes(discard, 0, 64, discard, 0);
-    }
+    // Decrypt body, continuing from counter=1
     final out = Uint8List(encBody.length);
     chachaPayload.processBytes(encBody, 0, encBody.length, out, 0);
 
@@ -998,42 +1008,28 @@ class SSHTransport {
 
     final paddingLength = ByteData.sublistView(out).getUint8(0);
     final payloadLength = len - paddingLength - 1;
-    _verifyPacketPadding(payloadLength, paddingLength);
+    // Same alignment rule as the send path: the separately-encrypted length
+    // field is excluded, and OpenSSH aligns this cipher on 8 bytes rather
+    // than on `SSHCipherType.blockSize`.
+    _verifyPacketPadding(
+      payloadLength,
+      paddingLength,
+      expectedPacketAlign: SSHPacket.minAlign,
+      includePacketLength: false,
+    );
     return Uint8List.sublistView(out, 1, 1 + payloadLength);
   }
 
-  // RFC 7539-style Poly1305 block processing with 16-byte padding
-  void _poly1305UpdatePadded(Mac mac, Uint8List data) {
-    if (data.isNotEmpty) {
-      mac.updateAll(data);
-      final rem = data.length & 0x0f;
-      if (rem != 0) {
-        mac.updateAll(Uint8List(16 - rem));
-      }
-    }
-  }
-
-  // little-endian 64-bit length encoding (low 32-bit used)
-  Uint8List _le64(int n) {
-    final out = Uint8List(8);
-    out[0] = n & 0xff;
-    out[1] = (n >>> 8) & 0xff;
-    out[2] = (n >>> 16) & 0xff;
-    out[3] = (n >>> 24) & 0xff;
-    // high 32 bits zero
-    return out;
-  }
-
-  // OpenSSH chacha nonce: 0x00000000 || uint64_le(seq) where upper 32 bits are zero
+  /// OpenSSH chacha nonce: the packet sequence number as a big-endian uint64,
+  /// matching `POKE_U64(seqbuf, seqnr)` in `cipher-chachapoly.c`. The original
+  /// ChaCha20 takes an 8-byte IV, unlike the RFC 7539 variant's 12.
   Uint8List _composeChaChaNonce(int seq) {
-    final nonce = Uint8List(12);
-    // bytes[0..3] = 0x00000000
-    // bytes[4..7] = seq (little-endian)
-    nonce[4] = (seq) & 0xff;
-    nonce[5] = (seq >>> 8) & 0xff;
-    nonce[6] = (seq >>> 16) & 0xff;
-    nonce[7] = (seq >>> 24) & 0xff;
-    // bytes[8..11] remain zero (upper 32 bits)
+    final nonce = Uint8List(8);
+    var remaining = seq;
+    for (var i = 7; i >= 0; i--) {
+      nonce[i] = remaining & 0xff;
+      remaining >>>= 8;
+    }
     return nonce;
   }
 
