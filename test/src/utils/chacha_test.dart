@@ -14,8 +14,8 @@ void main() {
 
       final (lenKey: lenKey, encKey: encKey) = splitOpenSSHChaChaKeys(material);
 
-      expect(encKey,
-          equals(Uint8List.fromList(List<int>.generate(32, (i) => i))));
+      expect(
+          encKey, equals(Uint8List.fromList(List<int>.generate(32, (i) => i))));
       expect(lenKey,
           equals(Uint8List.fromList(List<int>.generate(32, (i) => i + 32))));
     });
