@@ -116,17 +116,20 @@ class SSHAlgorithms {
       SSHHostkeyType.rsaSha1,
     ],
 
-    /// Prefer AES-GCM/CTR first for compatibility; keep ChaCha20-Poly1305
-    /// available but lower priority until its transport implementation fully
-    /// stabilises. CBC remains as legacy fallback only.
+    /// CTR first for the widest interoperability, then ChaCha20-Poly1305,
+    /// then AES-GCM. ChaCha20-Poly1305 ranks above GCM because pointycastle's
+    /// GHASH is roughly 30x slower than its ChaCha20 — on a server that
+    /// permits only AEAD ciphers, the order between these two decides whether
+    /// the connection runs at ~50 MiB/s or ~2 MiB/s. CBC remains a legacy
+    /// fallback only.
     this.cipher = const [
       // Prioritise widely-supported CTR modes for compatibility
       SSHCipherType.aes256ctr,
       SSHCipherType.aes128ctr,
-      // Offer AEAD modes once interoperability improves
+      // Fast AEAD first; GCM only when the peer offers nothing better
+      SSHCipherType.chacha20poly1305,
       SSHCipherType.aes256gcm,
       SSHCipherType.aes128gcm,
-      SSHCipherType.chacha20poly1305,
       // Legacy fallbacks (CBC)
       SSHCipherType.aes256cbc,
       SSHCipherType.aes128cbc,

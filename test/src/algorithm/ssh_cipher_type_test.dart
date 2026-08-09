@@ -141,9 +141,12 @@ void main() {
         equals([
           SSHCipherType.aes256ctr,
           SSHCipherType.aes128ctr,
+          // ChaCha20-Poly1305 outranks GCM: pointycastle's GHASH is far
+          // slower than its ChaCha20, and on an AEAD-only server this order
+          // is what decides the connection's throughput.
+          SSHCipherType.chacha20poly1305,
           SSHCipherType.aes256gcm,
           SSHCipherType.aes128gcm,
-          SSHCipherType.chacha20poly1305,
           SSHCipherType.aes256cbc,
           SSHCipherType.aes128cbc,
         ]));
