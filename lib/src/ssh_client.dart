@@ -1578,44 +1578,15 @@ class SSHClient {
   void _updateAuthMethodsBasedOnServerResponse(
       List<String> serverMethods, bool partialSuccess) {
     // RFC 4252: Server tells us which methods may productively continue
-    final supportedMethods = <SSHAuthMethod>[];
-
-    // Map server method names to our enum values
-    for (final methodName in serverMethods) {
-      switch (methodName) {
-        case 'publickey':
-          // Only re-queue publickey while untried keys remain, otherwise
-          // _authWithNextPublicKey would pop from an empty queue.
-          if (_keyPairsLeft.isNotEmpty) {
-            supportedMethods.add(SSHAuthMethod.publicKey);
-          }
-          break;
-        case 'password':
-          if (onPasswordRequest != null) {
-            supportedMethods.add(SSHAuthMethod.password);
-          }
-          break;
-        case 'keyboard-interactive':
-          if (onUserInfoRequest != null) {
-            supportedMethods.add(SSHAuthMethod.keyboardInteractive);
-          }
-          break;
-        case 'hostbased':
-          if (_hostbasedKeyPairsLeft.isNotEmpty &&
-              hostName != null &&
-              userNameOnClientHost != null) {
-            supportedMethods.add(SSHAuthMethod.hostbased);
-          }
-          break;
-        case 'none':
-          // RFC 4252: "none" should not be listed as supported, but handle it
-          printDebug?.call('Warning: Server listed "none" as supported method');
-          break;
-        default:
-          printDebug
-              ?.call('Unknown authentication method from server: $methodName');
-      }
-    }
+    final supportedMethods = continuableAuthMethods(
+      serverMethods: serverMethods,
+      hasUntriedKeys: _keyPairsLeft.isNotEmpty,
+      hasUntriedHostbasedKeys: _hostbasedKeyPairsLeft.isNotEmpty,
+      canSupplyPassword: onPasswordRequest != null,
+      canAnswerUserInfo: onUserInfoRequest != null,
+      hasHostbasedIdentity: hostName != null && userNameOnClientHost != null,
+      onNote: printDebug,
+    );
 
     // Update our method queue to only include server-supported methods
     _authMethodsLeft.clear();
