@@ -1486,6 +1486,12 @@ class SSHClient {
 
   void _authWithNextPublicKey() {
     printDebug?.call('SSHClient._authWithPublicKey');
+
+    if (_keyPairsLeft.isEmpty) {
+      _tryNextAuthMethod();
+      return;
+    }
+
     _authAttempts++;
 
     final keyPair = _keyPairsLeft.removeFirst();
@@ -1578,7 +1584,9 @@ class SSHClient {
     for (final methodName in serverMethods) {
       switch (methodName) {
         case 'publickey':
-          if (identities != null && identities!.isNotEmpty) {
+          // Only re-queue publickey while untried keys remain, otherwise
+          // _authWithNextPublicKey would pop from an empty queue.
+          if (_keyPairsLeft.isNotEmpty) {
             supportedMethods.add(SSHAuthMethod.publicKey);
           }
           break;
@@ -1593,8 +1601,7 @@ class SSHClient {
           }
           break;
         case 'hostbased':
-          if (hostbasedIdentities != null &&
-              hostbasedIdentities!.isNotEmpty &&
+          if (_hostbasedKeyPairsLeft.isNotEmpty &&
               hostName != null &&
               userNameOnClientHost != null) {
             supportedMethods.add(SSHAuthMethod.hostbased);
