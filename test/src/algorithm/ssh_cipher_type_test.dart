@@ -119,9 +119,6 @@ void main() {
           SSHKexType.dh16Sha512,
           SSHKexType.dh14Sha256,
           SSHKexType.dhGexSha256,
-          SSHKexType.dh14Sha1,
-          SSHKexType.dhGexSha1,
-          SSHKexType.dh1Sha1,
         ]));
 
     expect(
@@ -133,7 +130,6 @@ void main() {
           SSHHostkeyType.ecdsa256,
           SSHHostkeyType.rsaSha512,
           SSHHostkeyType.rsaSha256,
-          SSHHostkeyType.rsaSha1,
         ]));
 
     expect(
@@ -147,8 +143,6 @@ void main() {
           SSHCipherType.chacha20poly1305,
           SSHCipherType.aes256gcm,
           SSHCipherType.aes128gcm,
-          SSHCipherType.aes256cbc,
-          SSHCipherType.aes128cbc,
         ]));
 
     expect(
@@ -158,10 +152,6 @@ void main() {
           SSHMacType.hmacSha512Etm,
           SSHMacType.hmacSha256,
           SSHMacType.hmacSha512,
-          SSHMacType.hmacSha1,
-          SSHMacType.hmacMd5,
-          SSHMacType.hmacSha256_96,
-          SSHMacType.hmacSha512_96,
         ]));
   });
 }
