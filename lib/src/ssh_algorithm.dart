@@ -89,8 +89,8 @@ class SSHAlgorithms {
   final List<SSHMacType> mac;
 
   const SSHAlgorithms({
-    // Prefer modern KEX first; move legacy SHA-1/group1 variants to the end
-    // as fallback-only to improve security defaults.
+    // Legacy SHA-1 key exchanges remain available for callers that explicitly
+    // opt into them, but are not advertised by default.
     this.kex = const [
       SSHKexType.x25519Rfc,
       SSHKexType.x25519,
@@ -100,10 +100,6 @@ class SSHAlgorithms {
       SSHKexType.dh16Sha512,
       SSHKexType.dh14Sha256,
       SSHKexType.dhGexSha256,
-      // Legacy fallbacks (SHA-1/group1)
-      SSHKexType.dh14Sha1,
-      SSHKexType.dhGexSha1,
-      SSHKexType.dh1Sha1,
     ],
     this.hostkey = const [
       SSHHostkeyType.ed25519,
@@ -112,8 +108,6 @@ class SSHAlgorithms {
       SSHHostkeyType.ecdsa256,
       SSHHostkeyType.rsaSha512,
       SSHHostkeyType.rsaSha256,
-      // Legacy fallback
-      SSHHostkeyType.rsaSha1,
     ],
 
     /// CTR first for the widest interoperability, then ChaCha20-Poly1305,
@@ -121,7 +115,7 @@ class SSHAlgorithms {
     /// GHASH is roughly 30x slower than its ChaCha20 — on a server that
     /// permits only AEAD ciphers, the order between these two decides whether
     /// the connection runs at ~50 MiB/s or ~2 MiB/s. CBC remains a legacy
-    /// fallback only.
+    /// available only through explicit configuration.
     this.cipher = const [
       // Prioritise widely-supported CTR modes for compatibility
       SSHCipherType.aes256ctr,
@@ -130,21 +124,13 @@ class SSHAlgorithms {
       SSHCipherType.chacha20poly1305,
       SSHCipherType.aes256gcm,
       SSHCipherType.aes128gcm,
-      // Legacy fallbacks (CBC)
-      SSHCipherType.aes256cbc,
-      SSHCipherType.aes128cbc,
     ],
-    // Prefer modern SHA-2 MACs by default; full-length variants first,
-    // ETM variants for better security, truncated 96-bit as last-resort fallback.
+    // SHA-1, MD5, and truncated MACs remain opt-in for legacy peers.
     this.mac = const [
       SSHMacType.hmacSha256Etm,
       SSHMacType.hmacSha512Etm,
       SSHMacType.hmacSha256,
       SSHMacType.hmacSha512,
-      SSHMacType.hmacSha1,
-      SSHMacType.hmacMd5,
-      SSHMacType.hmacSha256_96,
-      SSHMacType.hmacSha512_96,
     ],
   });
 }
