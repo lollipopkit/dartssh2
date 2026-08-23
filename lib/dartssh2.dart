@@ -4,6 +4,9 @@ export 'src/ssh_client.dart';
 export 'src/ssh_errors.dart';
 export 'src/ssh_forward.dart';
 export 'src/ssh_key_pair.dart';
+// `SSHKeyPair.toPublicKey()` returns one, so this is already part of the
+// public surface; not exporting it only meant callers had to reach into src/.
+export 'src/ssh_hostkey.dart';
 export 'src/ssh_pem.dart';
 export 'src/ssh_session.dart';
 export 'src/ssh_signal.dart';
