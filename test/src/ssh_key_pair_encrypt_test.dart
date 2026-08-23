@@ -50,7 +50,8 @@ void main() {
         );
         // Compared as re-encoded plain PEMs rather than byte for byte: the
         // checkint is random, so two encodings of one key differ.
-        expect(reopened.toPublicKey().encode(), original.toPublicKey().encode());
+        expect(
+            reopened.toPublicKey().encode(), original.toPublicKey().encode());
       });
     }
 
@@ -79,11 +80,13 @@ void main() {
       // produce a key encrypted under '', which every tool would open.
       final pem = parse(sources['ed25519']!).toPem(passphrase: '');
       expect(SSHKeyPair.isEncryptedPem(pem), isFalse);
-      expect(() => OpenSSHKeyPairs.encrypted(
-        publicKeys: const [],
-        unencryptedPrivateKeyBlob: Uint8List(0),
-        passphrase: '',
-      ), throwsArgumentError);
+      expect(
+          () => OpenSSHKeyPairs.encrypted(
+                publicKeys: const [],
+                unencryptedPrivateKeyBlob: Uint8List(0),
+                passphrase: '',
+              ),
+          throwsArgumentError);
     });
   });
 
