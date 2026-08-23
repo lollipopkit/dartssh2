@@ -40,7 +40,10 @@ class SftpClient {
     _channel.stream.listen(
       _handleData,
       onError: (Object e, _) {
-        print('[SFTP] stream onError: $e');
+        assert(() {
+          print('[SFTP] stream onError: $e');
+          return true;
+        }());
         for (var waiter in _replyWaiters.values) {
           waiter.completeError(e);
         }
