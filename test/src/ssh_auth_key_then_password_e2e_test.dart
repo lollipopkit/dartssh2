@@ -64,7 +64,8 @@ void main() {
       }
     }, timeout: const Timeout(Duration(seconds: 30)));
 
-    test('a wrong password fails as an auth error, not an internal one', () async {
+    test('a wrong password fails as an auth error, not an internal one',
+        () async {
       final client = await connect(
         keys: unauthorisedKey(),
         withPassword: 'definitely-not-the-password',

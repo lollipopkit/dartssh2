@@ -146,7 +146,10 @@ class SSH_Message_Global_Request extends SSHMessage {
         result.add(SSHEcdsaPublicKey.decode(blob));
       } else {
         // Optionally handle unsupported types, e.g., log a warning or throw an error
-        print('Unsupported host key type in _parseHostKeys: $type');
+        assert(() {
+          print('Unsupported host key type in _parseHostKeys: $type');
+          return true;
+        }());
       }
     }
     return result;
