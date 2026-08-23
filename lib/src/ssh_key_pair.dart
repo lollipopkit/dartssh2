@@ -106,6 +106,68 @@ class OpenSSHKeyPairs {
         kdfName = 'none',
         kdfOptions = null;
 
+  /// The counterpart of [_decryptPrivateKeyBlob]: a container only
+  /// [passphrase] can open.
+  ///
+  /// `aes256-ctr` keyed by `bcrypt_pbkdf`, which is what `ssh-keygen` writes
+  /// and therefore what every other tool is known to read. [rounds] is its
+  /// default of 16.
+  ///
+  /// [unencryptedPrivateKeyBlob] is padded here rather than by the caller,
+  /// because how much padding it needs depends on the cipher: the whole blob
+  /// is encrypted, and a partial block cannot be.
+  factory OpenSSHKeyPairs.encrypted({
+    required List<Uint8List> publicKeys,
+    required Uint8List unencryptedPrivateKeyBlob,
+    required String passphrase,
+    int rounds = 16,
+    Random? random,
+  }) {
+    if (passphrase.isEmpty) {
+      throw ArgumentError.value(passphrase, 'passphrase', 'must not be empty');
+    }
+
+    const cipher = SSHCipherType.aes256ctr;
+    final rng = random ?? Random.secure();
+    final salt = Uint8List.fromList(
+      List<int>.generate(16, (_) => rng.nextInt(256)),
+    );
+
+    final padded = BytesBuilder()..add(unencryptedPrivateKeyBlob);
+    // Bytes 1, 2, 3, … — the same padding the unencrypted form uses, to the
+    // cipher's block size rather than to 8.
+    for (var i = 0; padded.length % cipher.blockSize != 0; i++) {
+      padded.addByte(i + 1);
+    }
+
+    final kdfOptions = OpenSSHBcryptKdfOptions(salt, rounds);
+    final passphraseBytes = Uint8List.fromList(utf8.encode(passphrase));
+    final kdfHash = Uint8List(cipher.keySize + cipher.ivSize);
+    bcrypt_pbkdf(
+      passphraseBytes,
+      passphraseBytes.lengthInBytes,
+      salt,
+      salt.lengthInBytes,
+      kdfHash,
+      kdfHash.lengthInBytes,
+      rounds,
+    );
+
+    final key = Uint8List.view(kdfHash.buffer, 0, cipher.keySize);
+    final iv = Uint8List.view(kdfHash.buffer, cipher.keySize, cipher.ivSize);
+    final encrypted = cipher
+        .createCipher(key, iv, forEncryption: true)
+        .processAll(padded.takeBytes());
+
+    return OpenSSHKeyPairs(
+      cipherName: cipher.name,
+      kdfName: 'bcrypt',
+      kdfOptions: kdfOptions,
+      publicKeys: publicKeys,
+      privateKeyBlob: encrypted,
+    );
+  }
+
   factory OpenSSHKeyPairs.decode(Uint8List keyBlob) {
     final reader = SSHMessageReader(keyBlob);
     final actualMagic = reader.readBytes(magic.length);
@@ -295,8 +357,13 @@ class OpenSSHBcryptKdfOptions implements OpenSSHKdfOptions {
 abstract mixin class OpenSSHKeyPair implements SSHKeyPair {
   void writeTo(SSHMessageWriter writer);
 
+  /// This key pair as an `OPENSSH PRIVATE KEY` PEM.
+  ///
+  /// With a [passphrase], one that only that passphrase opens — see
+  /// [OpenSSHKeyPairs.encrypted]. Without one, the plain form, which is what
+  /// re-encoding a key that was read from disk produces.
   @override
-  String toPem() {
+  String toPem({String? passphrase}) {
     final writer = SSHMessageWriter();
     final checkInt = Random().nextInt(0xFFFFFFFF);
 
@@ -304,6 +371,15 @@ abstract mixin class OpenSSHKeyPair implements SSHKeyPair {
     writer.writeUint32(checkInt);
     writer.writeUtf8(name);
     writeTo(writer);
+
+    if (passphrase != null && passphrase.isNotEmpty) {
+      // Padded inside, to the cipher's block size rather than to 8.
+      return OpenSSHKeyPairs.encrypted(
+        publicKeys: [toPublicKey().encode()],
+        unencryptedPrivateKeyBlob: writer.takeBytes(),
+        passphrase: passphrase,
+      ).toPem();
+    }
 
     // pad with bytes 1, 2, 3, ...
     for (var i = 0; writer.length % 8 != 0; i++) {
