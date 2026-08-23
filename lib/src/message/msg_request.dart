@@ -150,6 +150,7 @@ class SSH_Message_Global_Request extends SSHMessage {
           print('Unsupported host key type in _parseHostKeys: $type');
           return true;
         }());
+      }
     }
     return result;
   }
