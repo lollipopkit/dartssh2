@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/message/msg_kex_dh.dart';
+import 'package:dartssh2/src/message/msg_kex_ecdh.dart';
 import 'package:dartssh2/src/ssh_message.dart';
 import 'package:test/test.dart';
 
@@ -171,6 +172,26 @@ void main() {
 
       expect(reply.f, big);
       expect(reply.hostPublicKey, hostKey);
+    });
+  });
+
+  group('SSH_Message_KexECDH_Reply', () {
+    test('round-trips', () {
+      final hostPublicKey = Uint8List.fromList([1, 1, 1]);
+      final ecdhPublicKey = Uint8List.fromList([2, 2]);
+      final signature = Uint8List.fromList([3, 3, 3, 3]);
+
+      final original = SSH_Message_KexECDH_Reply(
+        hostPublicKey: hostPublicKey,
+        ecdhPublicKey: ecdhPublicKey,
+        signature: signature,
+      );
+      final decoded = SSH_Message_KexECDH_Reply.decode(original.encode());
+
+      expect(decoded.hostPublicKey, hostPublicKey);
+      expect(decoded.ecdhPublicKey, ecdhPublicKey);
+      expect(decoded.signature, signature);
+      expect(original.toString(), contains('SSH_Message_KexECDH_Reply'));
     });
   });
 }
