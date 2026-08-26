@@ -1,5 +1,11 @@
 part of 'sftp_client.dart';
 
+/// A large sentinel length used by [SftpFile.read] when the file's reported
+/// size cannot be trusted as a real byte count (see the comment where it's
+/// used). Reads keep pipelining up to this many bytes, but in practice the
+/// loop always terminates earlier via the server's SSH_FX_EOF status.
+const _kUnboundedReadLength = 1 << 40; // 1 TiB
+
 /// Represents an opened file handle on the remote SFTP server.
 class SftpFile {
   final Uint8List _handle;
@@ -72,6 +78,28 @@ class SftpFile {
       }
 
       length = fileSize - offset;
+
+      // Some filesystems report a size of 0 for files that actually
+      // contain data (e.g. Linux /proc entries, character/device files).
+      // SFTP signals end-of-file via the SSH_FX_EOF status code, not via
+      // the reported size, so don't trust a stat()-derived size of 0 as
+      // "nothing to read". Fall back to reading until the server tells us
+      // we've hit EOF. A genuinely empty file still terminates promptly:
+      // the very first read request comes back as EOF immediately. This
+      // only applies when we computed `length` ourselves - a caller who
+      // explicitly passes `length: 0` still gets an empty stream below.
+      if (length == 0) {
+        length = _kUnboundedReadLength;
+        // The read-ahead pipelining below assumes `length` reflects the
+        // real amount of remaining data, and will happily keep opening
+        // more concurrent requests as long as `reservedOffset` is short of
+        // `endOffset`. With a sentinel `endOffset` that's effectively
+        // unbounded, so force strictly sequential requests here - we don't
+        // know where the real EOF is, and we'd rather send one request at
+        // a time than fan out up to [maxPendingRequests] speculative reads
+        // into a file that may only be a few bytes long.
+        maxPendingRequests = 1;
+      }
     }
 
     if (length == 0) return;
