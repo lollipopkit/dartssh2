@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/ssh_errors.dart';
 import 'package:dartssh2/src/ssh_kex.dart';
 import 'package:dartssh2/src/utils/bigint.dart';
 import 'package:dartssh2/src/utils/list.dart';
@@ -79,11 +80,28 @@ class SSHKexDH implements SSHKex {
 
   /// Compute the shared secret K
   BigInt computeSecret(BigInt f) {
+    _validateRemotePublicValue(f);
     return f.modPow(x, p);
   }
 
   Future<BigInt> computeSecretAsync(BigInt f) async {
+    _validateRemotePublicValue(f);
     return sshCompute(_computeDHSecret, (f, x, p));
+  }
+
+  /// Validates the peer's public value `f`.
+  ///
+  /// https://tools.ietf.org/html/rfc4253#section-8 requires the client to
+  /// verify `1 < f < p - 1`. A value outside this range can never have been
+  /// produced by `g^y mod p` for a legitimate exponent `y`, and accepting it
+  /// anyway would let a malicious peer force a predictable (or otherwise
+  /// weak) shared secret.
+  void _validateRemotePublicValue(BigInt f) {
+    if (f <= BigInt.one || f >= p - BigInt.one) {
+      throw SSHHandshakeError(
+        'Invalid DH public value: f must satisfy 1 < f < p - 1',
+      );
+    }
   }
 }
 

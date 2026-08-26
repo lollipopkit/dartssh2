@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/kex/kex_x25519.dart';
+import 'package:dartssh2/src/ssh_errors.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -59,6 +60,50 @@ void main() {
 
       expect(validSharedSecret, isNotNull);
       expect(validSharedSecret.bitLength, greaterThan(0));
+    });
+  });
+
+  group('SSHKexX25519 small-order public key rejection (RFC 8731 §3)', () {
+    test('all-zero peer public key yields an all-zero secret and is '
+        'rejected', () {
+      final kex = SSHKexX25519();
+      final allZero = Uint8List(32);
+
+      expect(
+        () => kex.computeSecret(allZero),
+        throwsA(isA<SSHHandshakeError>()),
+      );
+    });
+
+    test('a known order-2 small-order point is rejected', () {
+      final kex = SSHKexX25519();
+
+      // A canonical order-2 point on Curve25519 (RFC 7748 §5.2 / widely
+      // cited "small order points" test vectors). Multiplying it by any
+      // private scalar yields an all-zero shared secret, so any peer that
+      // sends it (or any other small-order point) can force a known,
+      // attacker-predictable secret unless it is rejected.
+      final order2 = Uint8List.fromList([
+        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, //
+        0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a, //
+        0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, //
+        0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00, //
+      ]);
+
+      expect(
+        () => kex.computeSecret(order2),
+        throwsA(isA<SSHHandshakeError>()),
+      );
+    });
+
+    test('a normal exchange still succeeds (no regression)', () {
+      final kex1 = SSHKexX25519();
+      final kex2 = SSHKexX25519();
+
+      final secret1 = kex1.computeSecret(kex2.publicKey);
+      final secret2 = kex2.computeSecret(kex1.publicKey);
+
+      expect(secret1, equals(secret2));
     });
   });
 }
