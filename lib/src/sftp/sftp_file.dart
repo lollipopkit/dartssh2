@@ -324,12 +324,42 @@ class SftpFile {
       );
     }
 
+    // Whether `length` reflects a real, trustworthy byte count. It starts
+    // true (an explicit `length` from the caller is always trusted) and is
+    // only flipped below when we have to fall back to the stat()-size-0
+    // sentinel. It gates the truncation check at the end of this method -
+    // see the comment there for why that check can't just compare against
+    // the (possibly sentinel) `length` value directly.
+    var lengthIsKnown = true;
+
     if (length == null) {
       final fileSize = (await stat()).size;
       if (fileSize == null) {
         throw SftpError('Can not get file size');
       }
       length = fileSize - offset;
+
+      // Some filesystems report a size of 0 for files that actually contain
+      // data (e.g. Linux /proc entries, character/device files). SFTP
+      // signals end-of-file via the SSH_FX_EOF status code, not via the
+      // reported size, so don't trust a stat()-derived size of 0 as
+      // "nothing to download" - see the matching comment in [read] for the
+      // full reasoning. Fall back to downloading until the server tells us
+      // we've hit EOF instead. This only applies when we computed `length`
+      // ourselves; a caller who explicitly passes `length: 0` still gets an
+      // empty, zero-byte download below.
+      if (length == 0) {
+        length = _kUnboundedReadLength;
+        lengthIsKnown = false;
+        // See [read]: with the real end unknown, the reservation logic
+        // below can't tell when to stop fanning out speculative reads, so
+        // force strictly sequential requests instead of fanning out up to
+        // [maxPendingRequests] of them into a file that may only be a few
+        // bytes long. Because writes here go to their own offset (not
+        // gated on in-order arrival like [read]), concurrency wouldn't be
+        // *incorrect* - just wasteful for the common case this exists for.
+        maxPendingRequests = 1;
+      }
     }
 
     if (length == 0) return 0;
@@ -443,7 +473,12 @@ class SftpFile {
       scheduleReads();
     }
 
-    if (bytesWritten != length) {
+    // Only enforce the truncation check when `length` is a real target byte
+    // count. When it's the unbounded sentinel (stat() reported size 0 but
+    // EOF is what actually ended the loop above), `bytesWritten` will almost
+    // never equal the sentinel and this would misfire on every such
+    // download, including genuinely-complete ones and genuinely-empty ones.
+    if (lengthIsKnown && bytesWritten != length) {
       throw SftpError(
         'Incomplete download: received $bytesWritten of $length bytes',
       );
