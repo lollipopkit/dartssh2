@@ -142,9 +142,14 @@ class SSHClient {
   /// Crypto algorithms available for the client.
   final SSHAlgorithms algorithms;
 
-  /// Function called when the first host key is received. Return true to accept
-  /// the host key, false to reject it and close the connection. If this is
-  /// null, the host key is accepted automatically.
+  /// Function called when the first host key is received. The callback receives
+  /// the host key type and fingerprint, and should return true to accept the key
+  /// or false to reject it and close the connection. If this is null, all host
+  /// keys are accepted automatically. Warning: the signature check alone only
+  /// proves the peer owns the key it presented, not that it is the expected host.
+  /// Leaving this null exposes the connection to man-in-the-middle attacks. Supply
+  /// this callback and verify the fingerprint against a known-hosts entry or a
+  /// trusted certificate store.
   final SSHHostkeyVerifyHandler? onVerifyHostKey;
 
   /// List of identities (key pairs or external signers) to use for
