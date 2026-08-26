@@ -41,6 +41,42 @@ void main() {
       expect(response.body, isEmpty);
     });
 
+    test(
+        'reads the full body when there is no Content-Length and the body '
+        'arrives in a separate segment from the headers', () async {
+      final socket = _FakeSocket([
+        'HTTP/1.1 200 OK\r\n',
+        'content-type: text/plain\r\n',
+        '\r\n',
+        'hello world',
+      ]);
+
+      final response = await SSHHttpClientResponse.from(socket);
+
+      expect(response.statusCode, 200);
+      expect(response.body, 'hello world');
+      expect(response.headers.contentLength, -1);
+      expect(socket.closed, isTrue);
+    });
+
+    test(
+        'reads the full body when there is no Content-Length and the body '
+        'arrives in the same segment as the headers', () async {
+      final socket = _FakeSocket([
+        'HTTP/1.1 200 OK\r\n'
+            'content-type: text/plain\r\n'
+            '\r\n'
+            'hello world',
+      ]);
+
+      final response = await SSHHttpClientResponse.from(socket);
+
+      expect(response.statusCode, 200);
+      expect(response.body, 'hello world');
+      expect(response.headers.contentLength, -1);
+      expect(socket.closed, isTrue);
+    });
+
     test('throws for unsupported transfer encoding', () async {
       final socket = _FakeSocket([
         'HTTP/1.1 200 OK\r\n',
@@ -232,6 +268,48 @@ void main() {
         response.headers.ifModifiedSince,
         DateTime.parse('2024-01-01T09:00:00.000Z'),
       );
+    });
+
+    test('host and port parse a plain hostname with no port', () async {
+      final socket = _FakeSocket([
+        'HTTP/1.1 200 OK\r\n',
+        'host: example.com\r\n',
+        'content-length: 0\r\n',
+        '\r\n',
+      ]);
+
+      final response = await SSHHttpClientResponse.from(socket);
+
+      expect(response.headers.host, 'example.com');
+      expect(response.headers.port, isNull);
+    });
+
+    test('host and port parse a hostname with a port', () async {
+      final socket = _FakeSocket([
+        'HTTP/1.1 200 OK\r\n',
+        'host: example.com:8080\r\n',
+        'content-length: 0\r\n',
+        '\r\n',
+      ]);
+
+      final response = await SSHHttpClientResponse.from(socket);
+
+      expect(response.headers.host, 'example.com');
+      expect(response.headers.port, 8080);
+    });
+
+    test('host and port parse an IPv6 literal with a port', () async {
+      final socket = _FakeSocket([
+        'HTTP/1.1 200 OK\r\n',
+        'host: [::1]:22\r\n',
+        'content-length: 0\r\n',
+        '\r\n',
+      ]);
+
+      final response = await SSHHttpClientResponse.from(socket);
+
+      expect(response.headers.host, '::1');
+      expect(response.headers.port, 22);
     });
 
     test('response headers are immutable', () async {

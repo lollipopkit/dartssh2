@@ -412,7 +412,12 @@ class SSHHttpClientResponse {
 
     var inHeader = false;
     var inBody = false;
-    var contentLength = 0;
+    // -1 means "unknown" (no Content-Length header was present). In that
+    // case the body length is not known in advance, so reading continues
+    // until the stream ends (the connection is closed by the peer) rather
+    // than breaking out early. Only a non-negative value here means a
+    // Content-Length header was actually parsed from the response.
+    var contentLength = -1;
     var contentRead = 0;
     var finished = false;
 
@@ -586,6 +591,19 @@ class SSHHttpClientResponse {
   }
 }
 
+/// Parses a `Host` header value (e.g. `example.com`, `example.com:8080`,
+/// or the IPv6 form `[::1]:22`) into a [Uri] whose `host`/`port` reflect
+/// the authority.
+///
+/// [Uri.parse] treats a bare authority like `example.com:8080` as having
+/// scheme `example.com` and path `8080` (host/port both empty/zero), so a
+/// `//` prefix is added to make it unambiguous. A [val] that already
+/// includes a scheme (e.g. `http://example.com`) is tolerated as-is.
+Uri _parseHostHeaderUri(String val) {
+  final hasScheme = RegExp(r'^[a-zA-Z][a-zA-Z0-9+\-.]*://').hasMatch(val);
+  return Uri.parse(hasScheme ? val : '//$val');
+}
+
 class _SSHHttpClientResponseHeaders implements SSHHttpHeaders {
   final Map<String, List<String>> _headers;
 
@@ -680,7 +698,7 @@ class _SSHHttpClientResponseHeaders implements SSHHttpHeaders {
   String? get host {
     final val = value(SSHHttpHeaders.hostHeader);
     if (val != null) {
-      return Uri.parse(val).host;
+      return _parseHostHeaderUri(val).host;
     }
     return null;
   }
@@ -721,7 +739,8 @@ class _SSHHttpClientResponseHeaders implements SSHHttpHeaders {
   int? get port {
     final val = value(SSHHttpHeaders.hostHeader);
     if (val != null) {
-      return Uri.parse(val).port;
+      final uri = _parseHostHeaderUri(val);
+      return uri.hasPort ? uri.port : null;
     }
     return null;
   }
