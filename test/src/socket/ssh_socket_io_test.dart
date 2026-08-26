@@ -1,3 +1,6 @@
+// Connects to a real network host; excluded from the web job below via the
+// integration tag, but @TestOn('vm') is added defensively too.
+@TestOn('vm')
 @Tags(['integration'])
 library;
 

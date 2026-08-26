@@ -1,3 +1,7 @@
+// Uses test_utils.dart, which imports dart:io.
+@TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -54,8 +58,7 @@ void main() {
       harness.dispose();
     });
 
-    test('a stream error stops further chunks from being processed',
-        () async {
+    test('a stream error stops further chunks from being processed', () async {
       final harness = _SftpTestHarness();
       await harness.completeHandshake();
       final file = SftpFile(harness.client, Uint8List.fromList([1]));

@@ -1,3 +1,9 @@
+// Dynamic port forwarding is a stub that throws UnsupportedError on the web
+// (see lib/src/forward/dynamic_forward_stub.dart) -- a deliberate platform
+// limitation, not something this branch's fix touches.
+@TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:typed_data';
 

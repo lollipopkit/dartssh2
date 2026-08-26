@@ -77,3 +77,38 @@ jobs:
           name: codecov-umbrella # optional
           token: ${{ secrets.CODECOV_TOKEN }} # required
           verbose: true # optional (default = false)
+
+  # README.md documents web as a supported platform, but nothing compiled the
+  # test suite to JavaScript: ByteData.getUint64/setUint64, used throughout
+  # the AEAD ciphers and SFTP, throw `UnsupportedError` under dart2js
+  # ("Uint64 accessor not supported by dart2js"), which meant every AEAD
+  # cipher and all of SFTP were dead on the web without CI ever noticing.
+  #
+  # A large chunk of the suite is VM-only (dart:io, dart:mirrors, real
+  # sockets, the local sshd integration harness) and is skipped here via
+  # `@TestOn('vm')`/`testOn: 'vm'` on those files/tests, so this job covers a
+  # deliberate subset -- chosen so the 64-bit-sensitive AEAD nonce and SFTP
+  # wire-encoding paths this exists to guard are included. The `integration`
+  # tag is excluded for the same reason as the VM job's first test step: it
+  # needs a live network/sshd.
+  test-web:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        sdk: [stable]
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ matrix.sdk }}
+
+      - name: Print Dart SDK version
+        run: dart --version
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Run unit tests compiled to JavaScript (chrome)
+        run: dart test -p chrome --exclude-tags=integration

@@ -1,3 +1,7 @@
+// Uses test_utils.dart, which imports dart:io.
+@TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:typed_data';
 
