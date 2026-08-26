@@ -65,6 +65,99 @@ void main() {
       client.close();
     });
 
+    test('completes the handshake when the banner is split across two chunks',
+        () async {
+      final socket = _FakeSSHSocket();
+      final client = SSHClient(
+        socket,
+        username: 'demo',
+      );
+
+      // Regression for T-01: the version line arrives in two TCP segments /
+      // WebSocket frames, split in the middle of the identification string.
+      socket.addIncoming('SSH-2.0-Open');
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(client.remoteVersion, isNull);
+
+      socket.addIncoming('SSH_9.6\r\n');
+      await _pumpUntil(() => client.remoteVersion != null);
+
+      expect(client.remoteVersion, 'SSH-2.0-OpenSSH_9.6');
+
+      client.close();
+    });
+
+    test(
+        'completes the handshake when the banner is split across three '
+        'chunks, including a split \\r\\n terminator', () async {
+      final socket = _FakeSSHSocket();
+      final client = SSHClient(
+        socket,
+        username: 'demo',
+      );
+
+      socket.addIncoming('SSH-2.0-Te');
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(client.remoteVersion, isNull);
+
+      socket.addIncoming('st\r');
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(client.remoteVersion, isNull);
+
+      socket.addIncoming('\n');
+      await _pumpUntil(() => client.remoteVersion != null);
+
+      expect(client.remoteVersion, 'SSH-2.0-Test');
+
+      client.close();
+    });
+
+    test('accepts a server pre-banner line before the identification line',
+        () async {
+      final socket = _FakeSSHSocket();
+      final client = SSHClient(
+        socket,
+        username: 'demo',
+      );
+
+      // RFC 4253 §4.2 allows the server to send arbitrary lines of text
+      // before its identification line.
+      socket.addIncoming('Welcome to our SSH server!\r\n');
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(client.remoteVersion, isNull);
+
+      socket.addIncoming('SSH-2.0-OpenSSH_9.6\r\n');
+      await _pumpUntil(() => client.remoteVersion != null);
+
+      expect(client.remoteVersion, 'SSH-2.0-OpenSSH_9.6');
+
+      client.close();
+    });
+
+    test('rejects an oversized banner that never terminates', () async {
+      final socket = _FakeSSHSocket();
+      final client = SSHClient(
+        socket,
+        username: 'demo',
+      );
+
+      // No \r or \n anywhere in this data, so the version parser must fall
+      // back to the byte cap rather than waiting forever.
+      socket.addRawIncoming(Uint8List(10241));
+
+      await expectLater(
+        client.authenticated,
+        throwsA(
+          predicate((error) {
+            return error is SSHAuthAbortError &&
+                error.reason is SSHHandshakeError;
+          }),
+        ),
+      );
+
+      client.close();
+    });
+
     test('reschedules processing when more data remains in the buffer',
         () async {
       final socket = _FakeSSHSocket();
