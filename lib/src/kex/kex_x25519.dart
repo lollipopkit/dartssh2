@@ -27,6 +27,18 @@ class SSHKexX25519 implements SSHKexECDH {
 
   @override
   BigInt computeSecret(Uint8List remotePublicKey) {
+    // https://tools.ietf.org/html/rfc8731#section-3 MUSTs: "Clients and
+    // servers MUST also abort if the length of the received public keys are
+    // not the expected lengths." Without this a short or overlong key would
+    // reach scalseMult, which reads a fixed 32 bytes regardless.
+    if (remotePublicKey.length != _ScalarMult.groupElementLength) {
+      throw SSHHandshakeError(
+        'Invalid X25519 exchange: peer public key is '
+        '${remotePublicKey.length} bytes, expected '
+        '${_ScalarMult.groupElementLength}',
+      );
+    }
+
     final secret = _ScalarMult.scalseMult(privateKey, remotePublicKey);
 
     // https://tools.ietf.org/html/rfc8731#section-3 MUSTs: if the computed

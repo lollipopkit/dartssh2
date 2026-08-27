@@ -91,11 +91,13 @@ class SSHKexDH implements SSHKex {
 
   /// Validates the peer's public value `f`.
   ///
-  /// https://tools.ietf.org/html/rfc4253#section-8 requires the client to
-  /// verify `1 < f < p - 1`. A value outside this range can never have been
-  /// produced by `g^y mod p` for a legitimate exponent `y`, and accepting it
-  /// anyway would let a malicious peer force a predictable (or otherwise
-  /// weak) shared secret.
+  /// https://tools.ietf.org/html/rfc4253#section-8 says "Values of 'e' or 'f'
+  /// that are not in the range [1, p-1] MUST NOT be sent or accepted by
+  /// either side", which read literally still admits `1` and `p - 1`. Both
+  /// are degenerate: `f == 1` makes the shared secret `1` for any exponent,
+  /// and `f == p - 1` confines it to `{1, p - 1}`. The check below is
+  /// therefore the strict `1 < f < p - 1`, which is what OpenSSH enforces.
+  /// Do not loosen it back to the RFC's literal bound.
   void _validateRemotePublicValue(BigInt f) {
     if (f <= BigInt.one || f >= p - BigInt.one) {
       throw SSHHandshakeError(

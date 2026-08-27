@@ -45,7 +45,7 @@ void main() {
       final invalidPublicKey = Uint8List(31); // Invalid length
 
       expect(() => kex.computeSecret(invalidPublicKey),
-          throwsA(isA<ArgumentError>()));
+          throwsA(isA<SSHHandshakeError>()));
     });
 
     test('should handle valid inputs for scalar multiplication indirectly', () {
@@ -63,8 +63,36 @@ void main() {
     });
   });
 
+  group('SSHKexX25519 public key length check (RFC 8731 §3)', () {
+    // "Clients and servers MUST also abort if the length of the received
+    // public keys are not the expected lengths."
+    for (final length in [0, 1, 31, 33, 64]) {
+      test('a $length-byte peer public key is rejected', () {
+        final kex = SSHKexX25519();
+
+        expect(
+          () => kex.computeSecret(Uint8List(length)),
+          throwsA(isA<SSHHandshakeError>()),
+        );
+      });
+    }
+
+    test('the check runs before scalar multiplication', () {
+      // A 33-byte key whose first 32 bytes are a valid public key would
+      // otherwise be silently truncated and accepted by scalseMult.
+      final peer = SSHKexX25519();
+      final overlong = Uint8List(33)..setRange(0, 32, peer.publicKey);
+
+      expect(
+        () => SSHKexX25519().computeSecret(overlong),
+        throwsA(isA<SSHHandshakeError>()),
+      );
+    });
+  });
+
   group('SSHKexX25519 small-order public key rejection (RFC 8731 §3)', () {
-    test('all-zero peer public key yields an all-zero secret and is '
+    test(
+        'all-zero peer public key yields an all-zero secret and is '
         'rejected', () {
       final kex = SSHKexX25519();
       final allZero = Uint8List(32);
