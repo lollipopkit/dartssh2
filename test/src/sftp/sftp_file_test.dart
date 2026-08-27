@@ -130,16 +130,7 @@ void main() {
 
     test(
         'read on a genuinely empty file (stat size 0) resolves promptly '
-        'with no chunks',
-        // This hangs under dart2js/chrome: `_SftpTestHarness`'s outgoing
-        // stream subscription (`_outgoing.stream.first`, above) appears to
-        // race with `file.read()`'s internal scheduling differently under
-        // the browser event loop than on the VM. That's a pre-existing test
-        // harness timing issue unrelated to the 64-bit ByteData fix this
-        // suite otherwise validates on the web (see sftp_file_attrs_test.dart
-        // and sftp_packet_test.dart), so it's scoped out of the web CI job
-        // here rather than left to time out there.
-        testOn: 'vm', () async {
+        'with no chunks', () async {
       final harness = _SftpTestHarness();
       await harness.completeHandshake();
       final file = SftpFile(harness.client, Uint8List.fromList([1]));
@@ -172,9 +163,7 @@ void main() {
 
     test(
         'read falls back to EOF-driven reads for virtual files that report '
-        'stat size 0 but actually contain data',
-        // Same pre-existing web/VM timing race as the test above.
-        testOn: 'vm', () async {
+        'stat size 0 but actually contain data', () async {
       final harness = _SftpTestHarness();
       await harness.completeHandshake();
       final file = SftpFile(harness.client, Uint8List.fromList([1]));

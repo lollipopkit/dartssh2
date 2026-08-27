@@ -4,7 +4,12 @@ part of 'sftp_client.dart';
 /// size cannot be trusted as a real byte count (see the comment where it's
 /// used). Reads keep pipelining up to this many bytes, but in practice the
 /// loop always terminates earlier via the server's SSH_FX_EOF status.
-const _kUnboundedReadLength = 1 << 40; // 1 TiB
+///
+/// Written as a decimal literal on purpose. `1 << 40` folds to `0` under
+/// dart2js, whose shifts are 32-bit, which would send every virtual file
+/// straight back down the `length == 0` early return this constant exists to
+/// avoid.
+const _kUnboundedReadLength = 1099511627776; // 1 TiB
 
 /// Represents an opened file handle on the remote SFTP server.
 class SftpFile {
