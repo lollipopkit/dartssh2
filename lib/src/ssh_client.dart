@@ -796,8 +796,15 @@ class SSHClient {
   /// The host key is re-checked against the one already accepted for this
   /// connection, and a mismatch terminates the connection with an
   /// [SSHHostkeyError]; [onVerifyHostKey] is not consulted again.
-  void rekey() {
-    _transport.rekey();
+  ///
+  /// The returned future completes once the new keys are in effect. If an
+  /// exchange is already running, whether this side or the server started it,
+  /// no second one is sent and the future tracks the exchange in flight. If
+  /// the connection ends first the future completes with the error that ended
+  /// it, so awaiting this is enough to notice a failed rekey without watching
+  /// [done].
+  Future<void> rekey() {
+    return _transport.rekey();
   }
 
   /// Close all channels that are currently open.

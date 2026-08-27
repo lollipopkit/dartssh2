@@ -103,7 +103,9 @@ void main() {
         );
         expect(verifications, 1);
 
-        client.rekey();
+        // The future comes back once NEWKEYS is in effect, so a rekey that
+        // fell over shows up here rather than as a later timeout.
+        await client.rekey();
 
         // Outgoing packets are buffered until the exchange completes, so this
         // only comes back if the rekey went through, host key comparison and
@@ -124,7 +126,7 @@ void main() {
         final client = await getLocalClient();
         final session = await client.shell();
 
-        client.rekey();
+        await client.rekey();
 
         session
             .write(Uint8List.fromList('echo through-rekey\nexit\n'.codeUnits));
@@ -142,10 +144,12 @@ void main() {
         final client = await getLocalClient();
 
         for (var i = 0; i < 3; i++) {
-          client.rekey();
-          // A second rekey request while one is in progress is a no-op, so
-          // this also covers that path.
-          client.rekey();
+          final first = client.rekey();
+          // A second request while one is in progress does not start another
+          // exchange, it waits on the one already running. Both futures
+          // resolve off the same NEWKEYS.
+          final second = client.rekey();
+          await Future.wait([first, second]);
           expect(await client.run('echo rekey-$i'), isNotEmpty);
         }
 

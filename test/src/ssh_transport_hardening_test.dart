@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dartssh2/src/kex/kex_x25519.dart';
 import 'package:dartssh2/src/message/msg_kex_ecdh.dart';
+import 'package:dartssh2/src/message/msg_kex.dart';
 import 'package:dartssh2/src/ssh_message.dart';
 import 'package:dartssh2/src/ssh_packet.dart';
 import 'package:dartssh2/src/utils/cipher_ext.dart';
@@ -559,6 +560,197 @@ void main() {
       expect(transport.isClosed, isFalse);
 
       transport.close();
+    });
+  });
+
+  group('rekey() reports when the new keys are in effect', () {
+    /// Puts [transport] in the state a rekey starts from: version strings
+    /// exchanged, algorithms negotiated, first exchange already done.
+    void primeForRekey(SSHTransport transport, _CaptureSSHSocket socket) {
+      // The constructor already ran the opening handshake, KEXINIT included.
+      // Drop what it wrote so the counts below only see the rekey.
+      socket.packets.clear();
+
+      setPrivate(transport, '_remoteVersion', 'SSH-2.0-test');
+      setPrivate(
+        transport,
+        '_localKexInit',
+        Uint8List.fromList([20, 1, 2, 3]),
+      );
+      setPrivate(
+        transport,
+        '_remoteKexInit',
+        Uint8List.fromList([20, 4, 5, 6]),
+      );
+      setPrivate(transport, '_kexType', SSHKexType.x25519);
+      setPrivate(transport, '_hostkeyType', SSHHostkeyType.ed25519);
+      setPrivate(
+        transport,
+        '_clientCipherType',
+        SSHCipherType.chacha20poly1305,
+      );
+      setPrivate(
+        transport,
+        '_serverCipherType',
+        SSHCipherType.chacha20poly1305,
+      );
+      setPrivate(transport, '_kexInProgress', false);
+      setPrivate(transport, '_sentKexInit', false);
+    }
+
+    /// Drives [transport] through the rest of an exchange the way the server
+    /// would: a KEXDH reply carrying [hostKey], then NEWKEYS.
+    Future<void> completeExchange(
+      SSHTransport transport,
+      Uint8List hostKey,
+    ) async {
+      setPrivate(transport, '_kex', SSHKexX25519());
+      await invokePrivate(
+        transport,
+        '_handleMessageKexReply',
+        [
+          _encodeKexEcdhReply(
+            hostPublicKey: hostKey,
+            ecdhPublicKey: SSHKexX25519().publicKey,
+            // Never checked: disableHostkeyVerification is true.
+            signature: Uint8List(4),
+          )
+        ],
+      );
+      await invokePrivate(
+        transport,
+        '_handleMessageNewKeys',
+        [
+          Uint8List.fromList([SSH_Message_NewKeys.messageId])
+        ],
+      );
+    }
+
+    int countKexInits(_CaptureSSHSocket socket) {
+      // Nothing is encrypted on this transport, so a written packet's first
+      // payload byte is its message id: 5 bytes of length/padding header.
+      return socket.packets
+          .where((packet) =>
+              packet.length > 5 && packet[5] == SSH_Message_KexInit.messageId)
+          .length;
+    }
+
+    test('the future completes once NEWKEYS arrives, not before', () async {
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket, disableHostkeyVerification: true);
+      primeForRekey(transport, socket);
+
+      var completed = false;
+      final rekeyDone = transport.rekey().then((_) => completed = true);
+
+      expect(countKexInits(socket), 1);
+
+      // The exchange is in flight: nothing to report yet.
+      await pumpEventQueue();
+      expect(completed, isFalse);
+
+      await completeExchange(
+        transport,
+        Uint8List.fromList(List<int>.filled(32, 7)),
+      );
+
+      await rekeyDone;
+      expect(completed, isTrue);
+      expect(getPrivate<bool>(transport, '_kexInProgress'), isFalse);
+
+      await transport.close();
+    });
+
+    test('a second call joins the exchange in flight instead of starting one',
+        () async {
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket, disableHostkeyVerification: true);
+      primeForRekey(transport, socket);
+
+      final first = transport.rekey();
+      final second = transport.rekey();
+
+      // One exchange, two callers waiting on it.
+      expect(countKexInits(socket), 1);
+
+      await completeExchange(
+        transport,
+        Uint8List.fromList(List<int>.filled(32, 7)),
+      );
+
+      await Future.wait([first, second]);
+
+      await transport.close();
+    });
+
+    test('the future fails with the error that ended the connection', () async {
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket, disableHostkeyVerification: true);
+      primeForRekey(transport, socket);
+
+      final rekeyDone = transport.rekey();
+      final doneAssertion = expectLater(
+        transport.done,
+        throwsA(isA<SSHSocketError>()),
+      );
+
+      transport.closeWithError(SSHSocketError('connection reset'));
+
+      await expectLater(rekeyDone, throwsA(isA<SSHSocketError>()));
+      await doneAssertion;
+    });
+
+    test('an orderly close fails a rekey that never saw its NEWKEYS', () async {
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket, disableHostkeyVerification: true);
+      primeForRekey(transport, socket);
+
+      final rekeyDone = transport.rekey();
+      await transport.close();
+
+      await expectLater(rekeyDone, throwsA(isA<SSHStateError>()));
+    });
+
+    test('rekey() on a closed transport fails instead of hanging', () async {
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket, disableHostkeyVerification: true);
+      primeForRekey(transport, socket);
+
+      await transport.close();
+
+      await expectLater(transport.rekey(), throwsA(isA<SSHStateError>()));
+    });
+
+    test('dropping the future does not raise an unhandled error', () async {
+      final uncaught = <Object>[];
+      final settled = Completer<void>();
+
+      await runZonedGuarded(
+        () async {
+          final socket = _CaptureSSHSocket();
+          final transport = SSHTransport(
+            socket,
+            disableHostkeyVerification: true,
+          );
+          primeForRekey(transport, socket);
+
+          // A caller that fires a rekey and carries on. Only `done` is
+          // watched, which is what callers did before rekey() returned a
+          // future.
+          transport.rekey();
+          transport.done.catchError((_) {});
+
+          transport.closeWithError(SSHSocketError('connection reset'));
+          settled.complete();
+        },
+        (error, stackTrace) => uncaught.add(error),
+      );
+
+      await settled.future;
+      // Give the zone a chance to report a dropped error before asserting.
+      await pumpEventQueue();
+
+      expect(uncaught, isEmpty);
     });
   });
 }

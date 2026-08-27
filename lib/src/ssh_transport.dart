@@ -354,6 +354,13 @@ class SSHTransport {
   /// Packets queued during key exchange that will be sent after NEW_KEYS
   final List<Uint8List> _rekeyPendingPackets = [];
 
+  /// Completes when the key exchange a [rekey] call is waiting on reaches
+  /// SSH_MSG_NEWKEYS, or with an error if the connection ends first.
+  ///
+  /// `null` when no caller is waiting: the initial handshake and exchanges
+  /// nobody asked about do not allocate one.
+  Completer<void>? _rekeyCompleter;
+
   /// Sends an SSH packet payload over the transport.
   ///
   /// This method packs the [data], calculates padding and MAC, encrypts the payload
@@ -587,6 +594,10 @@ class SSHTransport {
     _socketSubscription?.cancel();
     _socketSubscription = null;
     _doneCompleter.complete();
+    _failPendingRekey(
+      SSHStateError('Transport closed before the key exchange completed'),
+      StackTrace.current,
+    );
     await socket.close();
   }
 
@@ -597,6 +608,7 @@ class SSHTransport {
     _socketSubscription?.cancel();
     _socketSubscription = null;
     _doneCompleter.completeError(error, stackTrace ?? StackTrace.current);
+    _failPendingRekey(error, stackTrace ?? StackTrace.current);
     socket.destroy();
   }
 
@@ -1927,18 +1939,65 @@ class SSHTransport {
     for (final packet in pending) {
       sendPacket(packet);
     }
+
+    final rekeyCompleter = _rekeyCompleter;
+    _rekeyCompleter = null;
+    rekeyCompleter?.complete();
   }
 
   /// Initiates a client-side re-key operation. This can be called
   /// by client code to refresh session keys when needed.
-  void rekey() {
+  ///
+  /// The returned future completes when the exchange reaches
+  /// SSH_MSG_NEWKEYS. If an exchange is already running, whether this side
+  /// or the peer started it, no second one is sent and the future tracks the
+  /// exchange in flight. If the connection ends before new keys are in place
+  /// the future completes with the error that ended it, or with an
+  /// [SSHStateError] on an orderly close.
+  Future<void> rekey() {
     printDebug?.call('SSHTransport.rekey');
-    if (_kexInProgress) {
-      printDebug
-          ?.call('Key exchange already in progress, ignoring rekey request');
-      return;
+
+    if (isClosed) {
+      return Future.error(
+        SSHStateError('Transport is closed'),
+        StackTrace.current,
+      );
     }
+
+    final future = _waitForNewKeys();
+
+    if (_kexInProgress) {
+      printDebug?.call(
+        'Key exchange already in progress, waiting for it instead of '
+        'starting another',
+      );
+      return future;
+    }
+
     _sendKexInit();
+    return future;
+  }
+
+  /// The future of the [_rekeyCompleter], creating it if no caller is waiting
+  /// on the current exchange yet.
+  Future<void> _waitForNewKeys() {
+    final completer = _rekeyCompleter ??= Completer<void>();
+
+    // A caller is free to drop the future, and the connection dying is not an
+    // unhandled error just because nobody looked. This listener marks the
+    // error handled without taking it away from the caller: the completer's
+    // future can carry more than one.
+    completer.future.catchError((_) {});
+
+    return completer.future;
+  }
+
+  /// Fails a [rekey] future that will never see its NEW_KEYS because the
+  /// connection ended first.
+  void _failPendingRekey(Object error, StackTrace stackTrace) {
+    final rekeyCompleter = _rekeyCompleter;
+    _rekeyCompleter = null;
+    rekeyCompleter?.completeError(error, stackTrace);
   }
 
   /// Determines if a packet should bypass the rekey buffer.
