@@ -16,6 +16,10 @@ export 'src/ssh_userauth.dart';
 export 'src/socket/ssh_socket.dart';
 
 export 'src/algorithm/ssh_cipher_type.dart';
+export 'src/algorithm/ssh_crypto_backend.dart';
+// The other half of [SSHBulkBlockCipher]: what the transport calls, and so what
+// an implementer of that interface has to be measured against.
+export 'src/utils/cipher_ext.dart' show BlockCipherX;
 export 'src/algorithm/ssh_hostkey_type.dart';
 export 'src/algorithm/ssh_kex_type.dart';
 export 'src/algorithm/ssh_mac_type.dart';
