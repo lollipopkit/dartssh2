@@ -786,6 +786,20 @@ class SSHClient {
     await _transport.flush();
   }
 
+  /// Starts a new key exchange on an established connection, refreshing the
+  /// session keys.
+  ///
+  /// Outgoing packets are buffered until the exchange completes, so channels
+  /// and sessions keep working across it. A no-op while a key exchange is
+  /// already in progress. The server may also start one on its own.
+  ///
+  /// The host key is re-checked against the one already accepted for this
+  /// connection, and a mismatch terminates the connection with an
+  /// [SSHHostkeyError]; [onVerifyHostKey] is not consulted again.
+  void rekey() {
+    _transport.rekey();
+  }
+
   /// Close all channels that are currently open.
   void _closeChannels([Object? error, StackTrace? stackTrace]) {
     for (final channel in _channels.values) {

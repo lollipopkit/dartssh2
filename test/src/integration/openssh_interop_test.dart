@@ -81,6 +81,78 @@ void main() {
       });
     }
 
+    // The host key comparison on rekey is the one change here that can turn a
+    // connection which used to survive into one that drops, so it gets an
+    // exercise against a real server rather than a fake transport only.
+    group('rekey', () {
+      test('a rekey keeps the connection usable', () async {
+        var verifications = 0;
+        final client = SSHClient(
+          await SSHSocket.connect(localSshdHost, localSshdPort),
+          username: localSshdUser,
+          onPasswordRequest: () => localSshdPassword,
+          onVerifyHostKey: (type, fingerprint) {
+            verifications++;
+            return true;
+          },
+        );
+
+        expect(
+          String.fromCharCodes(await client.run('echo before')).trim(),
+          'before',
+        );
+        expect(verifications, 1);
+
+        client.rekey();
+
+        // Outgoing packets are buffered until the exchange completes, so this
+        // only comes back if the rekey went through, host key comparison and
+        // all. A mismatch would have terminated the connection instead.
+        expect(
+          String.fromCharCodes(await client.run('echo after')).trim(),
+          'after',
+        );
+
+        // The server presents the same host key, so the connection survives
+        // and onVerifyHostKey is not consulted a second time.
+        expect(verifications, 1);
+
+        await client.close();
+      });
+
+      test('an open session survives a rekey', () async {
+        final client = await getLocalClient();
+        final session = await client.shell();
+
+        client.rekey();
+
+        session
+            .write(Uint8List.fromList('echo through-rekey\nexit\n'.codeUnits));
+        final output = String.fromCharCodes(
+          await session.stdout.expand((chunk) => chunk).toList(),
+        );
+
+        expect(output, contains('through-rekey'));
+
+        await session.done;
+        await client.close();
+      });
+
+      test('repeated rekeys are safe', () async {
+        final client = await getLocalClient();
+
+        for (var i = 0; i < 3; i++) {
+          client.rekey();
+          // A second rekey request while one is in progress is a no-op, so
+          // this also covers that path.
+          client.rekey();
+          expect(await client.run('echo rekey-$i'), isNotEmpty);
+        }
+
+        await client.close();
+      });
+    });
+
     test('transfers a file over SFTP', () async {
       final client = await getLocalClient();
       final sftp = await client.sftp();
