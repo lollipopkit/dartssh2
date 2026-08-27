@@ -134,6 +134,52 @@ void main() {
       client.close();
     });
 
+    test('rejects a server that streams pre-banner lines without end',
+        () async {
+      final socket = _FakeSSHSocket();
+      final client = SSHClient(
+        socket,
+        username: 'demo',
+      );
+
+      // Each line is short enough that the 10240 byte cap never trips, and
+      // the buffer drains as lines are consumed, so only the line counter
+      // stops this. Feed it in chunks to exercise the counter surviving
+      // across separate _processVersionExchange calls.
+      for (var chunk = 0; chunk < 11; chunk++) {
+        socket.addIncoming('hi\r\n' * 100);
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      await expectLater(
+        client.authenticated,
+        throwsA(
+          predicate((error) {
+            return error is SSHAuthAbortError &&
+                error.reason is SSHHandshakeError;
+          }),
+        ),
+      );
+
+      client.close();
+    });
+
+    test('accepts a banner arriving after many pre-banner lines', () async {
+      final socket = _FakeSSHSocket();
+      final client = SSHClient(
+        socket,
+        username: 'demo',
+      );
+
+      socket.addIncoming('hi\r\n' * 1000);
+      socket.addIncoming('SSH-2.0-OpenSSH_9.6\r\n');
+      await _pumpUntil(() => client.remoteVersion != null);
+
+      expect(client.remoteVersion, 'SSH-2.0-OpenSSH_9.6');
+
+      client.close();
+    });
+
     test('rejects an oversized banner that never terminates', () async {
       final socket = _FakeSSHSocket();
       final client = SSHClient(

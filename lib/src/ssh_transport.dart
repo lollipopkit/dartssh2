@@ -669,6 +669,17 @@ class SSHTransport {
     }
   }
 
+  /// Maximum number of pre-banner lines accepted before the identification
+  /// line. RFC 4253 §4.2 puts no limit on them; OpenSSH stops after 1024 and
+  /// so do we, so that a server streaming lines forever cannot keep a client
+  /// busy indefinitely. This library has no handshake timeout to fall back on.
+  static const _maxPreBannerLines = 1024;
+
+  /// Pre-banner lines skipped so far. Persists across calls to
+  /// [_processVersionExchange] because the cap has to bound the whole
+  /// exchange, not a single pass over the buffer.
+  var _preBannerLines = 0;
+
   /// Parses the SSH protocol banner/version string sent by the remote host.
   ///
   /// This may be called multiple times as the socket delivers more data: if
@@ -709,6 +720,13 @@ class SSHTransport {
       if (!versionString.startsWith('SSH-')) {
         // A pre-banner line: discard it and keep looking for the
         // identification line.
+        _preBannerLines++;
+        if (_preBannerLines > _maxPreBannerLines) {
+          throw SSHHandshakeError(
+            'Too many lines before the version string '
+            '(more than $_maxPreBannerLines)',
+          );
+        }
         _buffer.consume(lineEnd);
         continue;
       }
