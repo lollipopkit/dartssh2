@@ -61,33 +61,28 @@ BlockCipher _pointycastle(
   }
 }
 
-class _FakeBulkCipher implements SSHBulkBlockCipher {
-  _FakeBulkCipher(this.algorithmName, this._inner);
+/// An ordinary [BlockCipher] that counts how often it is asked for a block and
+/// otherwise delegates.
+class _CountingCipher implements BlockCipher {
+  _CountingCipher(this.algorithmName, this.inner);
 
   @override
   final String algorithmName;
 
-  final BlockCipher _inner;
+  final BlockCipher inner;
 
-  var bulkCalls = 0;
   var blockCalls = 0;
 
   @override
-  int get blockSize => _inner.blockSize;
+  int get blockSize => inner.blockSize;
 
   @override
-  Uint8List processBulk(Uint8List data) {
-    bulkCalls++;
-    return _inner.processAll(data);
-  }
-
-  @override
-  Uint8List process(Uint8List data) => _inner.process(data);
+  Uint8List process(Uint8List data) => inner.process(data);
 
   @override
   int processBlock(Uint8List inp, int inpOff, Uint8List out, int outOff) {
     blockCalls++;
-    return _inner.processBlock(inp, inpOff, out, outOff);
+    return inner.processBlock(inp, inpOff, out, outOff);
   }
 
   @override
@@ -96,6 +91,20 @@ class _FakeBulkCipher implements SSHBulkBlockCipher {
 
   @override
   void reset() => throw StateError('keyed on creation');
+}
+
+/// The same, plus the bulk interface — which is the only difference
+/// `BlockCipherX.processAll` dispatches on.
+class _FakeBulkCipher extends _CountingCipher implements SSHBulkBlockCipher {
+  _FakeBulkCipher(super.algorithmName, super.inner);
+
+  var bulkCalls = 0;
+
+  @override
+  Uint8List processBulk(Uint8List data) {
+    bulkCalls++;
+    return inner.processAll(data);
+  }
 }
 
 /// A MAC that is not a MAC — the tag is [macSize] copies of a fixed byte. These
@@ -363,16 +372,37 @@ void main() {
     });
 
     test('still walks a plain cipher a block at a time', () {
-      final plain = SSHCipherType.aes256ctr.createCipher(
-        _bytes(32, 3),
-        _bytes(16, 5),
-        forEncryption: true,
+      // The same wrapper without the bulk interface, which is the only thing
+      // the dispatch looks at.
+      final plain = _CountingCipher(
+        'aes256-ctr',
+        _pointycastle(
+          SSHCipherType.aes256ctr,
+          _bytes(32, 3),
+          _bytes(16, 5),
+          forEncryption: true,
+        ),
       );
-      final wrapped = _FakeBulkCipher('aes256-ctr', plain);
-
-      // Reached through the extension on the plain type, not the wrapper.
       expect(plain, isNot(isA<SSHBulkBlockCipher>()));
-      expect(wrapped, isA<SSHBulkBlockCipher>());
+
+      final packet = _bytes(4096, 9);
+      final walked = plain.processAll(packet);
+
+      expect(plain.blockCalls, packet.length ~/ plain.blockSize);
+
+      // And the two paths produce the same bytes, so the dispatch is a choice
+      // of how rather than of what.
+      final bulk = _FakeBulkCipher(
+        'aes256-ctr',
+        _pointycastle(
+          SSHCipherType.aes256ctr,
+          _bytes(32, 3),
+          _bytes(16, 5),
+          forEncryption: true,
+        ),
+      );
+      expect(walked, bulk.processAll(packet));
+      expect(bulk.bulkCalls, 1);
     });
 
     test('refuses an unaligned packet either way', () {
