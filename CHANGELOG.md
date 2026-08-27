@@ -1,3 +1,17 @@
+## [3.4.0] - Unreleased
+- **Behaviour change.** A host key that changes during a rekey now terminates the connection with `SSHHostkeyError`, as OpenSSH does. The signature was already re-checked on every exchange, but that only proved the key presented was self-consistent, not that it was the key `onVerifyHostKey` had already approved, so a server could hand out one key at connect time and a different one on the first rekey. A connection that used to survive this will now drop. `onVerifyHostKey` is consulted once per connection, not once per exchange [#229].
+- Fixed the version exchange failing when the banner arrives split across TCP segments or WebSocket frames. It was treated as a framing error rather than a partial read, which made the WebSocket transport the README recommends for web unreliable by construction, and any slow or proxied connection intermittently so. Lines of text sent before the identification line are also skipped now, which RFC 4253 §4.2 says clients MUST be able to process; at most 1024 of them, matching OpenSSH, so a server streaming them forever cannot keep a client busy [#229].
+- Fixed `keyboard-interactive` responses being written to the trace log in plaintext, which put the user's password in any log a caller collected with `printTrace` set [#229].
+- Changed MAC comparison to constant time, and removed both the received and the expected MAC from the failure message [#229].
+- Fixed three of the four packet send paths using a fixed padding pattern instead of random bytes, contrary to RFC 4253 §6 [#229].
+- Added validation of the peer's public value in every key exchange. Finite field Diffie-Hellman now requires `1 < f < p - 1`, the NIST curves reject points that fail to decode, lie off the curve or are the point at infinity, and X25519 rejects small-order points via the RFC 8731 §3 all-zero shared secret check and requires the key to be exactly 32 bytes. Without these a peer could force a shared secret it knew in advance [#229].
+- Added the missing lower bound and AEAD path checks to packet length validation, and made a zero-length payload raise `SSHPacketError` instead of a `RangeError` that no `SSHError` handler would catch [#229].
+- Changed the non-ETM receive path to verify the MAC before parsing the padding, so a forged packet is rejected before its length fields are trusted [#229].
+- Fixed `SSH_MSG_KEX_ECDH_REPLY` being encoded with its fields in the wrong order. RFC 5656 §4 specifies `K_S, Q_S, signature`, which is what this library's own decoder already expected, so only a peer decoding what dartssh2 sent as a server was affected [#229].
+- Fixed `writeMpint(BigInt.zero)` emitting `00 00 00 01 00` where RFC 4251 §5 requires a zero-length string, and `readNameList` returning `['']` for an empty name-list [#229].
+- Documented that leaving `onVerifyHostKey` null accepts any host key, which makes the connection trivially interceptable. The parameter is optional and the behaviour was not stated anywhere [#229].
+- Added `SSHClient.rekey()`, which starts a new key exchange on an established connection. `SSHTransport.rekey()` was already public; this exposes it where callers actually work [#229].
+
 ## [3.3.1] - 2026-08-19
 - Removed the background isolate offload from X25519 and NIST curve key exchange, which cost more than the work it was hiding. Generating an ephemeral key or computing the shared secret on these curves is one fixed-size scalar multiply, well under a millisecond, while `Isolate.run` takes several times that to spawn and tear down, and a client pays it twice per handshake. On a memory constrained Android device the spawn delay was long enough for the server to time out the key exchange and close the connection before `SSH_MSG_NEWKEYS` went out, surfacing as `SSHAuthAbortError` with a null reason [#226]. Thanks [@cesarcamps].
 - Kept the offload for finite field Diffie-Hellman, which is the one exchange whose cost the peer controls: group exchange lets the server name a modulus of up to 8192 bits, and modular exponentiation grows steeply with it.
@@ -385,6 +399,7 @@
 [#224]: https://github.com/vicajilau/dartssh2/pull/224
 [#225]: https://github.com/vicajilau/dartssh2/pull/225
 [#226]: https://github.com/vicajilau/dartssh2/issues/226
+[#229]: https://github.com/vicajilau/dartssh2/pull/229
 
 [@linhanyu]: https://github.com/linhanyu
 [@Migarl]: https://github.com/Migarl
