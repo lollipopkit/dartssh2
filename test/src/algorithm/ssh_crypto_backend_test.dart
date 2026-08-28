@@ -1,6 +1,11 @@
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
+// Not exported from the barrel.
+// ignore_for_file: implementation_imports
+import 'package:dartssh2/src/hostkey/hostkey_ed25519.dart';
+import 'package:dartssh2/src/kex/kex_x25519.dart';
+import 'package:dartssh2/src/utils/bigint.dart';
 import 'package:pointycastle/api.dart';
 import 'package:test/test.dart';
 
@@ -11,7 +16,9 @@ import 'package:test/test.dart';
 /// tests assert on bytes: whatever comes out has to equal what the unmodified
 /// library produces, so a wiring mistake shows up as wrong output rather than
 /// as output nobody can check.
-class _FakeBackend implements SSHCryptoBackend {
+// `extends`, not `implements`: the defaults are what make an unimplemented
+// operation fall back to the built-in, and that is what most of a backend is.
+class _FakeBackend extends SSHCryptoBackend {
   _FakeBackend({this.ciphers = const {}, this.macs = const {}});
 
   final Set<String> ciphers;
@@ -145,6 +152,8 @@ Uint8List _bytes(int length, [int seed = 1]) => Uint8List.fromList(
     List.generate(length, (i) => (i * 31 + seed * 17) & 0xff));
 
 void main() {
+  _asymTests();
+
   tearDown(() => sshCryptoBackend = null);
 
   group('with no backend installed', () {
@@ -429,6 +438,237 @@ void main() {
         () => plain.processAll(_bytes(17)),
         throwsA(isA<FormatException>()),
       );
+    });
+  });
+}
+
+const _ed25519Pem = '''
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACAmeIqTaKVgK3jyqh4LHAn/4XF3L+mFu2FuSIb2WCRxQwAAAIjjp0Dr46dA
+6wAAAAtzc2gtZWQyNTUxOQAAACAmeIqTaKVgK3jyqh4LHAn/4XF3L+mFu2FuSIb2WCRxQw
+AAAECuXvUxDg2J8RvI6EoCFTBjjLrotdM94vQdVdEEUghqRyZ4ipNopWArePKqHgscCf/h
+cXcv6YW7YW5IhvZYJHFDAAAABHRlc3QB
+-----END OPENSSH PRIVATE KEY-----''';
+
+/// The same shape a passphrase-protected key has: `aes256-ctr` keyed by
+/// `bcrypt_pbkdf` at ssh-keygen's default 16 rounds.
+const _ed25519EncPem = '''
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAg5Riwua
+5beS4snWWUidONAAAAGAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIEDCcGtimUlgaIHj
+G1FSAGBNXDjxJpZ4d+uUiVxL0N8oAAAAkDONlRPg/9bWYy0tjcW/wn00ojgtXOZUblfZHR
+phdwU92jyvjO0h8UnsMsSXjJRGzdq/DdVbNTVoqgYAbCCK3hwrtJIj8c7j5T+l6KzhI7a3
+FjyMnkPazhD4KqM6JIhL2ODTcXfue7n0u/gRKVYHjCRQEoxKqUGHs9AHgfp5LtKRkxUsN9
+tnsPaek1tyG3JuTQ==
+-----END OPENSSH PRIVATE KEY-----''';
+
+const _encPassphrase = 'hunter2';
+
+final _message = Uint8List.fromList(List.generate(32, (i) => i * 7 & 0xff));
+
+/// Answers the asymmetric operations from what the test handed it, and records
+/// what it was asked for. `null` for an operation means "not implemented", so a
+/// field left unset exercises the fallback.
+class _AsymBackend extends SSHCryptoBackend {
+  _AsymBackend({
+    this.x25519Pair,
+    this.shared,
+    this.edSign,
+    this.edVerify,
+    this.bcrypt,
+  });
+
+  final (Uint8List, Uint8List)? x25519Pair;
+  final Uint8List? shared;
+  final Uint8List? edSign;
+  final bool? edVerify;
+  final Uint8List? bcrypt;
+
+  final calls = <String>[];
+
+  @override
+  (Uint8List, Uint8List)? x25519KeyPair() {
+    calls.add('x25519KeyPair');
+    return x25519Pair;
+  }
+
+  @override
+  Uint8List? x25519SharedSecret(Uint8List privateKey, Uint8List peerPublic) {
+    calls.add('x25519SharedSecret');
+    return shared;
+  }
+
+  @override
+  Uint8List? ed25519Sign(Uint8List privateKey, Uint8List message) {
+    calls.add('ed25519Sign');
+    return edSign;
+  }
+
+  @override
+  bool? ed25519Verify(Uint8List pub, Uint8List message, Uint8List signature) {
+    calls.add('ed25519Verify');
+    return edVerify;
+  }
+
+  @override
+  Uint8List? bcryptPbkdf(
+    Uint8List passphrase,
+    Uint8List salt,
+    int rounds,
+    int outputLength,
+  ) {
+    calls.add('bcryptPbkdf:$rounds:$outputLength');
+    return bcrypt;
+  }
+}
+
+void _asymTests() {
+  tearDown(() => sshCryptoBackend = null);
+
+  group('a backend that implements nothing', () {
+    // The whole reason the methods have defaults: `extends SSHCryptoBackend`
+    // with no overrides has to behave exactly like no backend at all.
+    test('changes none of it', () async {
+      sshCryptoBackend = _AsymBackend();
+
+      final kex = await SSHKexX25519.createAsync();
+      final peer = await SSHKexX25519.createAsync();
+      expect(kex.privateKey, hasLength(32));
+      expect(
+        await kex.computeSecretAsync(peer.publicKey),
+        await peer.computeSecretAsync(kex.publicKey),
+      );
+
+      final pair = SSHKeyPair.fromPem(_ed25519Pem).first;
+      final pub = pair.toPublicKey() as SSHEd25519PublicKey;
+      expect(
+        pub.verify(_message, pair.sign(_message) as SSHEd25519Signature),
+        isTrue,
+      );
+      expect(
+        SSHKeyPair.fromPem(_ed25519EncPem, _encPassphrase).first.type,
+        'ssh-ed25519',
+      );
+    });
+  });
+
+  group('x25519', () {
+    test('uses the backend keypair instead of the isolate', () async {
+      final priv = Uint8List.fromList(List.filled(32, 7));
+      final pub = Uint8List.fromList(List.filled(32, 9));
+      final backend = _AsymBackend(x25519Pair: (priv, pub));
+      sshCryptoBackend = backend;
+
+      final kex = await SSHKexX25519.createAsync();
+      expect(backend.calls, ['x25519KeyPair']);
+      expect(kex.privateKey, priv);
+      expect(kex.publicKey, pub);
+    });
+
+    test('uses the backend shared secret', () async {
+      final secret = Uint8List.fromList(List.generate(32, (i) => i + 1));
+      final backend = _AsymBackend(shared: secret);
+      sshCryptoBackend = backend;
+
+      final kex = await SSHKexX25519.createAsync();
+      expect(
+        await kex.computeSecretAsync(Uint8List(32)),
+        decodeBigIntWithSign(1, secret),
+      );
+      expect(backend.calls, contains('x25519SharedSecret'));
+    });
+  });
+
+  group('ed25519', () {
+    test('signs with the backend when it offers one', () {
+      final sig = Uint8List.fromList(List.generate(64, (i) => i));
+      final backend = _AsymBackend(edSign: sig);
+      sshCryptoBackend = backend;
+
+      final pair = SSHKeyPair.fromPem(_ed25519Pem).first;
+      expect((pair.sign(_message) as SSHEd25519Signature).signature, sig);
+      expect(backend.calls, ['ed25519Sign']);
+    });
+
+    // The one that decides whether a forged host key is accepted: `false` is a
+    // rejection and `null` is "ask the built-in", and reading either as the
+    // other is the whole risk of this seam.
+    test('false is a rejection and null is a fallback', () {
+      final pair = SSHKeyPair.fromPem(_ed25519Pem).first;
+      final pub = pair.toPublicKey() as SSHEd25519PublicKey;
+      final good = pair.sign(_message) as SSHEd25519Signature;
+
+      sshCryptoBackend = _AsymBackend(edVerify: false);
+      expect(
+        pub.verify(_message, good),
+        isFalse,
+        reason: 'a backend false must stand even for a valid signature',
+      );
+
+      sshCryptoBackend = _AsymBackend();
+      expect(
+        pub.verify(_message, good),
+        isTrue,
+        reason: 'null is unsupported, not invalid',
+      );
+
+      sshCryptoBackend = _AsymBackend(edVerify: true);
+      expect(
+        pub.verify(_message, good),
+        isTrue,
+        reason: 'a backend true is taken as given',
+      );
+    });
+
+    // The two paths reject a bad signature differently, and the difference is
+    // worth pinning down rather than smoothing over: pinenacl throws, while a
+    // backend answers `false`. `SSHTransport._verifyHostkey`'s caller turns
+    // `false` into `SSHHostkeyError`, so the backend path produces a typed SSH
+    // error where the built-in leaks pinenacl's. Both refuse; neither returns
+    // true.
+    test('a tampered signature is refused either way', () {
+      final pair = SSHKeyPair.fromPem(_ed25519Pem).first;
+      final pub = pair.toPublicKey() as SSHEd25519PublicKey;
+      final good = pair.sign(_message) as SSHEd25519Signature;
+      final tampered = SSHEd25519Signature(
+        Uint8List.fromList(good.signature)..[0] ^= 1,
+      );
+
+      sshCryptoBackend = _AsymBackend();
+      expect(() => pub.verify(_message, tampered), throwsA(anything));
+
+      sshCryptoBackend = _AsymBackend(edVerify: false);
+      expect(pub.verify(_message, tampered), isFalse);
+    });
+  });
+
+  group('bcrypt_pbkdf', () {
+    test('is asked with the rounds and the length the key file implies', () {
+      // 24 is the round count stored in this key, not a constant of the
+      // format — asserting it is how a fixture regenerated with different
+      // settings announces itself. 48 is aes256-ctr's 32-byte key plus its
+      // 16-byte IV, cut from one derived buffer.
+      final backend = _AsymBackend(bcrypt: Uint8List(48));
+      sshCryptoBackend = backend;
+
+      // The derived key is wrong, so opening it must fail — which is also the
+      // proof that the backend's answer was the one used.
+      expect(
+        () => SSHKeyPair.fromPem(_ed25519EncPem, _encPassphrase),
+        throwsA(isA<SSHKeyDecryptError>()),
+      );
+      expect(backend.calls, ['bcryptPbkdf:24:48']);
+    });
+
+    test('falls back to the built-in when the backend has none', () {
+      final backend = _AsymBackend();
+      sshCryptoBackend = backend;
+      expect(
+        SSHKeyPair.fromPem(_ed25519EncPem, _encPassphrase).first.type,
+        'ssh-ed25519',
+      );
+      expect(backend.calls, ['bcryptPbkdf:24:48']);
     });
   });
 }

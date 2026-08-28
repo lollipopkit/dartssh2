@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/algorithm/ssh_crypto_backend.dart';
 import 'package:dartssh2/src/ssh_kex.dart';
 import 'package:dartssh2/src/utils/compute.dart';
 import 'package:dartssh2/src/utils/bigint.dart';
@@ -25,7 +26,16 @@ class SSHKexX25519 implements SSHKexECDH {
 
   SSHKexX25519._({required this.privateKey, required this.publicKey});
 
+  /// The isolate is what makes this async, and a backend removes the need
+  /// for one: scalar multiplication is sub-millisecond in Dart, which is worth
+  /// hiding behind `Isolate.run` and not worth spawning an isolate for once it
+  /// is microseconds. The signature stays a `Future` so callers do not have to
+  /// know which happened.
   static Future<SSHKexX25519> createAsync() async {
+    final native = sshCryptoBackend?.x25519KeyPair();
+    if (native != null) {
+      return SSHKexX25519._(privateKey: native.$1, publicKey: native.$2);
+    }
     final (privateKey, publicKey) =
         await sshCompute(_computeX25519KeyPair, null);
     return SSHKexX25519._(
@@ -41,6 +51,11 @@ class SSHKexX25519 implements SSHKexECDH {
   }
 
   Future<BigInt> computeSecretAsync(Uint8List remotePublicKey) async {
+    final native = sshCryptoBackend?.x25519SharedSecret(
+      privateKey,
+      remotePublicKey,
+    );
+    if (native != null) return decodeBigIntWithSign(1, native);
     final secret = await sshCompute(
       _computeX25519Secret,
       (privateKey, remotePublicKey),

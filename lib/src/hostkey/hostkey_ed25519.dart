@@ -1,4 +1,5 @@
 import 'package:convert/convert.dart';
+import 'package:dartssh2/src/algorithm/ssh_crypto_backend.dart';
 import 'package:dartssh2/src/ssh_hostkey.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:pinenacl/ed25519.dart';
@@ -30,6 +31,16 @@ class SSHEd25519PublicKey implements SSHHostKey {
 
   /// Verifies Ed25519 [signature] on [message] with private key matching [publicKey].
   bool verify(Uint8List message, SSHEd25519Signature signature) {
+    // `null` is "this backend does not do Ed25519"; `false` is "not a
+    // valid signature". Reading one as the other decides whether to trust
+    // a host, so they are kept apart here rather than at the far end.
+    final native = sshCryptoBackend?.ed25519Verify(
+      key,
+      message,
+      signature.signature,
+    );
+    if (native != null) return native;
+
     // tweetnacl.Signature(publicKey.key!, null).detached_verify(message, signature.sig!);
     return VerifyKey(key).verify(
       signature: Signature(signature.signature),

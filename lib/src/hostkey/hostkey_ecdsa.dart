@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:convert/convert.dart';
+import 'package:dartssh2/src/algorithm/ssh_crypto_backend.dart';
 import 'package:dartssh2/src/ssh_hostkey.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:pointycastle/export.dart';
@@ -42,6 +43,17 @@ class SSHEcdsaPublicKey implements SSHHostKey {
     Uint8List message,
     SSHEcdsaSignature signature,
   ) {
+    // Three-valued on purpose — see the Ed25519 host key for why `null` and
+    // `false` must not collapse into each other here.
+    final native = sshCryptoBackend?.ecdsaVerify(
+      curveId,
+      q,
+      message,
+      signature.r,
+      signature.s,
+    );
+    if (native != null) return native;
+
     final signer = ECDSASigner(curveHash);
 
     signer.init(
