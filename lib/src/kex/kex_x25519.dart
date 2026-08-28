@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/algorithm/ssh_crypto_backend.dart';
+import 'package:dartssh2/src/ssh_errors.dart';
 import 'package:dartssh2/src/ssh_kex.dart';
 import 'package:dartssh2/src/utils/compute.dart';
 import 'package:dartssh2/src/utils/bigint.dart';
@@ -46,8 +47,7 @@ class SSHKexX25519 implements SSHKexECDH {
 
   @override
   BigInt computeSecret(Uint8List remotePublicKey) {
-    final secret = _ScalarMult.scalseMult(privateKey, remotePublicKey);
-    return decodeBigIntWithSign(1, secret);
+    return _secretFrom(_ScalarMult.scalseMult(privateKey, remotePublicKey));
   }
 
   Future<BigInt> computeSecretAsync(Uint8List remotePublicKey) async {
@@ -61,12 +61,26 @@ class SSHKexX25519 implements SSHKexECDH {
       privateKey,
       remotePublicKey,
     );
-    if (native != null) return decodeBigIntWithSign(1, native);
+    if (native != null) return _secretFrom(native);
     final secret = await sshCompute(
       _computeX25519Secret,
       (privateKey, remotePublicKey),
     );
-    return decodeBigIntWithSign(1, secret);
+    return _secretFrom(secret);
+  }
+
+  /// The exchange hash input, refusing a secret the peer chose.
+  ///
+  /// RFC 8731 requires this: a peer that sends a low-order point forces a
+  /// shared secret that it knows too, and curve25519 signals that as an
+  /// all-zero output. `TweetNaCl.crypto_scalarmult` returns it without
+  /// complaint, so the check has to be here — on the path every caller takes,
+  /// rather than inside whichever implementation happened to run.
+  static BigInt _secretFrom(Uint8List secret) {
+    for (final byte in secret) {
+      if (byte != 0) return decodeBigIntWithSign(1, secret);
+    }
+    throw SSHHandshakeError('curve25519 peer sent a low-order point');
   }
 }
 

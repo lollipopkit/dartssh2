@@ -729,9 +729,15 @@ class SSHTransport {
         return null;
       }
 
-      while (_decryptBuffer.length < 4 + packetLength) {
-        final block = _buffer.consume(blockSize);
-        _decryptBuffer.add(_decryptCipher!.process(block));
+      // The length check above proved the whole packet has arrived, so the
+      // rest of it goes through in one call. Walking it a block at a time is
+      // what an `SSHBulkBlockCipher` exists to avoid, and this is the receive
+      // direction — the high-volume one for a terminal or a file read.
+      final remaining = 4 + packetLength - _decryptBuffer.length;
+      if (remaining > 0) {
+        _decryptBuffer.add(
+          _decryptCipher!.processAll(_buffer.consume(remaining)),
+        );
       }
 
       final packet = _decryptBuffer.consume(packetLength + 4);
