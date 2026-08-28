@@ -3,8 +3,10 @@ import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
 // Not exported from the barrel.
 // ignore_for_file: implementation_imports
+import 'package:dartssh2/src/hostkey/hostkey_ecdsa.dart';
 import 'package:dartssh2/src/hostkey/hostkey_ed25519.dart';
 import 'package:dartssh2/src/kex/kex_x25519.dart';
+import 'package:dartssh2/src/utils/bcrypt.dart' as builtin;
 import 'package:dartssh2/src/utils/bigint.dart';
 import 'package:pointycastle/api.dart';
 import 'package:test/test.dart';
@@ -452,7 +454,9 @@ cXcv6YW7YW5IhvZYJHFDAAAABHRlc3QB
 -----END OPENSSH PRIVATE KEY-----''';
 
 /// The same shape a passphrase-protected key has: `aes256-ctr` keyed by
-/// `bcrypt_pbkdf` at ssh-keygen's default 16 rounds.
+/// `bcrypt_pbkdf` at 24 rounds, which is what the ssh-keygen that wrote it
+/// chose. The round count lives in the key, not in the format, which is why
+/// the tests assert the number they do.
 const _ed25519EncPem = '''
 -----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAg5Riwua
@@ -465,6 +469,16 @@ tnsPaek1tyG3JuTQ==
 
 const _encPassphrase = 'hunter2';
 
+const _ecdsaPem = '''
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAaAAAABNlY2RzYS
+1zaGEyLW5pc3RwMjU2AAAACG5pc3RwMjU2AAAAQQQc1TjnppHiTdGaj+xNnQh++l3GSBgB
+6B4BlLnkJ10nCLhqi2pNOgRaOLtKNOLNJ5MAamrAVozurBrjnMYUp5mUAAAAoCz+zxAs/s
+8QAAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBBzVOOemkeJN0ZqP
+7E2dCH76XcZIGAHoHgGUueQnXScIuGqLak06BFo4u0o04s0nkwBqasBWjO6sGuOcxhSnmZ
+QAAAAgP0rwW2WsQ8RYnxy27cil8AleViluaY3v0eI2eO9/aYwAAAAEdGVzdAECAwQ=
+-----END OPENSSH PRIVATE KEY-----''';
+
 final _message = Uint8List.fromList(List.generate(32, (i) => i * 7 & 0xff));
 
 /// Answers the asymmetric operations from what the test handed it, and records
@@ -476,6 +490,8 @@ class _AsymBackend extends SSHCryptoBackend {
     this.shared,
     this.edSign,
     this.edVerify,
+    this.ecSign,
+    this.ecVerify,
     this.bcrypt,
   });
 
@@ -483,6 +499,8 @@ class _AsymBackend extends SSHCryptoBackend {
   final Uint8List? shared;
   final Uint8List? edSign;
   final bool? edVerify;
+  final (BigInt, BigInt)? ecSign;
+  final bool? ecVerify;
   final Uint8List? bcrypt;
 
   final calls = <String>[];
@@ -509,6 +527,24 @@ class _AsymBackend extends SSHCryptoBackend {
   bool? ed25519Verify(Uint8List pub, Uint8List message, Uint8List signature) {
     calls.add('ed25519Verify');
     return edVerify;
+  }
+
+  @override
+  (BigInt, BigInt)? ecdsaSign(String curveId, BigInt d, Uint8List message) {
+    calls.add('ecdsaSign:$curveId');
+    return ecSign;
+  }
+
+  @override
+  bool? ecdsaVerify(
+    String curveId,
+    Uint8List q,
+    Uint8List message,
+    BigInt r,
+    BigInt s,
+  ) {
+    calls.add('ecdsaVerify:$curveId');
+    return ecVerify;
   }
 
   @override
@@ -564,6 +600,24 @@ void _asymTests() {
       expect(backend.calls, ['x25519KeyPair']);
       expect(kex.privateKey, priv);
       expect(kex.publicKey, pub);
+    });
+
+    test('a peer key of the wrong length fails the same way either way',
+        () async {
+      // The length check lives in `_ScalarMult`, which a backend does not go
+      // through, so without one of its own the error would depend on which
+      // backend happened to be installed.
+      for (final backend in [
+        _AsymBackend(),
+        _AsymBackend(shared: Uint8List(32))
+      ]) {
+        sshCryptoBackend = backend;
+        final kex = await SSHKexX25519.createAsync();
+        expect(
+          () => kex.computeSecretAsync(Uint8List(31)),
+          throwsArgumentError,
+        );
+      }
     });
 
     test('uses the backend shared secret', () async {
@@ -643,6 +697,79 @@ void _asymTests() {
     });
   });
 
+  group('ecdsa', () {
+    late SSHKeyPair pair;
+    late SSHEcdsaPublicKey pub;
+
+    setUp(() {
+      sshCryptoBackend = null;
+      pair = SSHKeyPair.fromPem(_ecdsaPem).first;
+      pub = pair.toPublicKey() as SSHEcdsaPublicKey;
+    });
+
+    test('signs with the backend, under the curve from the key', () {
+      final rs = (BigInt.from(11), BigInt.from(22));
+      final backend = _AsymBackend(ecSign: rs);
+      sshCryptoBackend = backend;
+
+      final sig = pair.sign(_message) as SSHEcdsaSignature;
+      expect(backend.calls, ['ecdsaSign:nistp256']);
+      expect((sig.r, sig.s), rs);
+      expect(sig.type, 'ecdsa-sha2-nistp256');
+    });
+
+    test('falls back when the backend has no ecdsa', () {
+      final backend = _AsymBackend();
+      sshCryptoBackend = backend;
+
+      final sig = pair.sign(_message) as SSHEcdsaSignature;
+      expect(backend.calls, ['ecdsaSign:nistp256']);
+      // Signed by pointycastle, so it must verify through pointycastle.
+      sshCryptoBackend = null;
+      expect(pub.verify(_message, sig), isTrue);
+    });
+
+    // The same three-valued contract the Ed25519 host key has, and the same
+    // reason: this is what decides whether a forged host key is accepted.
+    test('false is a rejection and null is a fallback', () {
+      final good = pair.sign(_message) as SSHEcdsaSignature;
+
+      final rejecting = _AsymBackend(ecVerify: false);
+      sshCryptoBackend = rejecting;
+      expect(
+        pub.verify(_message, good),
+        isFalse,
+        reason: 'a backend false must stand even for a valid signature',
+      );
+      expect(rejecting.calls, ['ecdsaVerify:nistp256']);
+
+      sshCryptoBackend = _AsymBackend();
+      expect(
+        pub.verify(_message, good),
+        isTrue,
+        reason: 'null is unsupported, not invalid',
+      );
+
+      sshCryptoBackend = _AsymBackend(ecVerify: true);
+      expect(
+        pub.verify(_message, good),
+        isTrue,
+        reason: 'a backend true is taken as given',
+      );
+    });
+
+    test('the built-in still rejects a tampered signature', () {
+      sshCryptoBackend = _AsymBackend();
+      final good = pair.sign(_message) as SSHEcdsaSignature;
+      final tampered = SSHEcdsaSignature(
+        'ecdsa-sha2-nistp256',
+        good.r + BigInt.one,
+        good.s,
+      );
+      expect(pub.verify(_message, tampered), isFalse);
+    });
+  });
+
   group('bcrypt_pbkdf', () {
     test('is asked with the rounds and the length the key file implies', () {
       // 24 is the round count stored in this key, not a constant of the
@@ -661,6 +788,47 @@ void _asymTests() {
       expect(backend.calls, ['bcryptPbkdf:24:48']);
     });
 
+    // What a real derivation produces, so a backend can hand back exactly
+    // these bytes in an awkward shape and the key must still open.
+    Uint8List derived() {
+      final pass = Uint8List.fromList(_encPassphrase.codeUnits);
+      final salt = _saltOf(_ed25519EncPem);
+      final out = Uint8List(48);
+      builtin.bcrypt_pbkdf(
+        pass,
+        pass.length,
+        salt,
+        salt.length,
+        out,
+        out.length,
+        24,
+      );
+      return out;
+    }
+
+    // The silent one. Both callers cut the key and the IV out of the returned
+    // list's *buffer* from offset zero, so a backend answering with a view into
+    // a larger buffer would have them read from whatever precedes it — and the
+    // only symptom is a correct passphrase that will not open the key.
+    test('a backend view into a larger buffer is normalised', () {
+      final padded = Uint8List(80)..setRange(16, 64, derived());
+      sshCryptoBackend = _AsymBackend(
+        bcrypt: Uint8List.view(padded.buffer, 16, 48),
+      );
+      expect(
+        SSHKeyPair.fromPem(_ed25519EncPem, _encPassphrase).first.type,
+        'ssh-ed25519',
+      );
+    });
+
+    test('a backend of the wrong length is refused, not used', () {
+      sshCryptoBackend = _AsymBackend(bcrypt: Uint8List(32));
+      expect(
+        () => SSHKeyPair.fromPem(_ed25519EncPem, _encPassphrase),
+        throwsA(isA<StateError>()),
+      );
+    });
+
     test('falls back to the built-in when the backend has none', () {
       final backend = _AsymBackend();
       sshCryptoBackend = backend;
@@ -671,4 +839,13 @@ void _asymTests() {
       expect(backend.calls, ['bcryptPbkdf:24:48']);
     });
   });
+}
+
+/// The `bcrypt` salt out of an OpenSSH private key's kdf options.
+///
+/// Read off the wire form rather than hard-coded beside the fixture, so the two
+/// cannot drift apart.
+Uint8List _saltOf(String pemText) {
+  final pairs = OpenSSHKeyPairs.decode(SSHPem.decode(pemText).content);
+  return (pairs.kdfOptions! as OpenSSHBcryptKdfOptions).salt;
 }

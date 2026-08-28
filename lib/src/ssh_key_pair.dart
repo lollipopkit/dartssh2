@@ -34,7 +34,20 @@ Uint8List _bcryptPbkdf(
     rounds,
     outputLength,
   );
-  if (native != null) return native;
+  if (native != null) {
+    if (native.length != outputLength) {
+      throw StateError(
+        'SSHCryptoBackend.bcryptPbkdf returned ${native.length} bytes for an '
+        'output length of $outputLength',
+      );
+    }
+    // Both callers cut a key and an IV out of this with `Uint8List.view` from
+    // offset zero of its *buffer*, which is where the data starts only when
+    // the list owns that buffer. A backend may hand back a view into a larger
+    // one — FFI bindings often do — and the key and IV would then be read from
+    // whatever precedes it, silently and only for that backend.
+    return native.offsetInBytes == 0 ? native : Uint8List.fromList(native);
+  }
 
   final out = Uint8List(outputLength);
   bcrypt_pbkdf(

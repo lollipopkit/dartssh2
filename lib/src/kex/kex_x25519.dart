@@ -51,6 +51,12 @@ class SSHKexX25519 implements SSHKexECDH {
   }
 
   Future<BigInt> computeSecretAsync(Uint8List remotePublicKey) async {
+    // Checked here and not only in `_ScalarMult`, which a backend does not go
+    // through: a peer key of the wrong length should fail the same way with a
+    // backend installed as without one.
+    if (remotePublicKey.length != _ScalarMult.groupElementLength) {
+      throw ArgumentError('p must be 32 bytes long');
+    }
     final native = sshCryptoBackend?.x25519SharedSecret(
       privateKey,
       remotePublicKey,
