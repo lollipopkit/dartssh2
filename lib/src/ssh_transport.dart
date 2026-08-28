@@ -997,9 +997,19 @@ class SSHTransport {
         return null;
       }
 
-      while (_decryptBuffer.length < 4 + packetLength) {
-        final block = _buffer.consume(blockSize);
-        _decryptBuffer.add(_decryptCipher!.process(block));
+      final encryptedPacketLength = 4 + packetLength;
+      if (encryptedPacketLength % blockSize != 0) {
+        throw SSHPacketError(
+          'Encrypted packet length $encryptedPacketLength is not a multiple '
+          'of block size $blockSize',
+        );
+      }
+
+      final remaining = encryptedPacketLength - _decryptBuffer.length;
+      if (remaining > 0) {
+        _decryptBuffer.add(
+          _decryptCipher!.processAll(_buffer.consume(remaining)),
+        );
       }
 
       final packet = _decryptBuffer.consume(packetLength + 4);
