@@ -602,6 +602,31 @@ void _asymTests() {
       expect(kex.publicKey, pub);
     });
 
+    // RFC 8731. The check has to be on the path every caller takes: a peer
+    // sending a low-order point forces a secret it knows too, and TweetNaCl
+    // returns the all-zero result without complaint.
+    test('a low-order peer point is refused with or without a backend',
+        () async {
+      // All-zero is the canonical low-order point, and an all-zero secret is
+      // how curve25519 reports one.
+      for (final backend in [
+        _AsymBackend(),
+        _AsymBackend(shared: Uint8List(32)),
+      ]) {
+        sshCryptoBackend = backend;
+        final kex = await SSHKexX25519.createAsync();
+        expect(
+          () => kex.computeSecretAsync(Uint8List(32)),
+          throwsA(isA<SSHHandshakeError>()),
+          reason: 'backend: ${backend.calls}',
+        );
+        expect(
+          () => kex.computeSecret(Uint8List(32)),
+          throwsA(isA<SSHHandshakeError>()),
+        );
+      }
+    });
+
     test('a peer key of the wrong length fails the same way either way',
         () async {
       // The length check lives in `_ScalarMult`, which a backend does not go
