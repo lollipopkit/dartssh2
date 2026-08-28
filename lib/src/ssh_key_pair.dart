@@ -16,6 +16,52 @@ import 'package:dartssh2/src/utils/list.dart';
 import 'package:pinenacl/ed25519.dart' as ed25519;
 import 'package:pointycastle/export.dart';
 
+/// `bcrypt_pbkdf`, through [sshCryptoBackend] when it offers one.
+///
+/// Both callers want the same thing — a key and an IV cut from one derived
+/// buffer — and reading and writing an encrypted key have to derive it the same
+/// way or a key this wrote is a key this cannot open. One function is what
+/// makes that structural rather than remembered.
+Uint8List _bcryptPbkdf(
+  Uint8List passphrase,
+  Uint8List salt,
+  int rounds,
+  int outputLength,
+) {
+  final native = sshCryptoBackend?.bcryptPbkdf(
+    passphrase,
+    salt,
+    rounds,
+    outputLength,
+  );
+  if (native != null) {
+    if (native.length != outputLength) {
+      throw StateError(
+        'SSHCryptoBackend.bcryptPbkdf returned ${native.length} bytes for an '
+        'output length of $outputLength',
+      );
+    }
+    // Both callers cut a key and an IV out of this with `Uint8List.view` from
+    // offset zero of its *buffer*, which is where the data starts only when
+    // the list owns that buffer. A backend may hand back a view into a larger
+    // one — FFI bindings often do — and the key and IV would then be read from
+    // whatever precedes it, silently and only for that backend.
+    return native.offsetInBytes == 0 ? native : Uint8List.fromList(native);
+  }
+
+  final out = Uint8List(outputLength);
+  bcrypt_pbkdf(
+    passphrase,
+    passphrase.lengthInBytes,
+    salt,
+    salt.lengthInBytes,
+    out,
+    out.lengthInBytes,
+    rounds,
+  );
+  return out;
+}
+
 abstract class SSHKeyPair {
   static List<SSHKeyPair> fromPem(String pemText, [String? passphrase]) {
     final pem = SSHPem.decode(pemText);
@@ -141,15 +187,11 @@ class OpenSSHKeyPairs {
 
     final kdfOptions = OpenSSHBcryptKdfOptions(salt, rounds);
     final passphraseBytes = Uint8List.fromList(utf8.encode(passphrase));
-    final kdfHash = Uint8List(cipher.keySize + cipher.ivSize);
-    bcrypt_pbkdf(
+    final kdfHash = _bcryptPbkdf(
       passphraseBytes,
-      passphraseBytes.lengthInBytes,
       salt,
-      salt.lengthInBytes,
-      kdfHash,
-      kdfHash.lengthInBytes,
       rounds,
+      cipher.keySize + cipher.ivSize,
     );
 
     final key = Uint8List.view(kdfHash.buffer, 0, cipher.keySize);
@@ -286,16 +328,11 @@ class OpenSSHKeyPairs {
 
     final kdfOptions = this.kdfOptions as OpenSSHBcryptKdfOptions;
 
-    final kdfHash = Uint8List(cipher.keySize + cipher.ivSize);
-
-    bcrypt_pbkdf(
+    final kdfHash = _bcryptPbkdf(
       passphrase,
-      passphrase.lengthInBytes,
       kdfOptions.salt,
-      kdfOptions.salt.lengthInBytes,
-      kdfHash,
-      kdfHash.lengthInBytes,
       kdfOptions.rounds,
+      cipher.keySize + cipher.ivSize,
     );
 
     final key = Uint8List.view(kdfHash.buffer, 0, cipher.keySize);
@@ -495,6 +532,9 @@ class OpenSSHEd25519KeyPair with OpenSSHKeyPair {
 
   @override
   SSHEd25519Signature sign(Uint8List data) {
+    final native = sshCryptoBackend?.ed25519Sign(privateKey, data);
+    if (native != null) return SSHEd25519Signature(native);
+
     final signer = ed25519.SigningKey.fromValidBytes(privateKey);
     return SSHEd25519Signature(signer.sign(data).asTypedList.sublist(0, 64));
   }
@@ -544,6 +584,14 @@ class OpenSSHEcdsaKeyPair with OpenSSHKeyPair {
 
   @override
   SSHEcdsaSignature sign(Uint8List data) {
+    // A backend's signature will not match what the code below produces for
+    // the same input, and does not have to: ECDSA takes a nonce, and a backend
+    // may be deterministic where this is randomised. Both verify.
+    final native = sshCryptoBackend?.ecdsaSign(curveId, d, data);
+    if (native != null) {
+      return SSHEcdsaSignature('ecdsa-sha2-$curveId', native.$1, native.$2);
+    }
+
     late Digest hash;
     late ECDomainParameters curve;
 
