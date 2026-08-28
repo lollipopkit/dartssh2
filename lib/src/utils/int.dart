@@ -32,6 +32,9 @@ typedef Uint32Pair = ({int high, int low});
 /// offsets; a silently truncated offset risks corrupting a file transfer,
 /// so a loud failure was chosen over a documented precision-loss caveat.
 int combineUint32Pair(int high, int low) {
+  // These JavaScript-only guards run in the Chrome test job. The VM coverage
+  // upload cannot execute them because kIntIsImprecise is false there.
+  // coverage:ignore-start
   if (kIntIsImprecise) {
     // Exact iff the combined value is <= 2^53. Checked without ever
     // computing `high * 0x100000000`, since that multiplication is exactly
@@ -46,6 +49,7 @@ int combineUint32Pair(int high, int low) {
       );
     }
   }
+  // coverage:ignore-end
   return high * 0x100000000 + low;
 }
 
@@ -58,6 +62,9 @@ int combineUint32Pair(int high, int low) {
 /// for a negative value or one above 2^53, for the same reason described on
 /// [combineUint32Pair].
 Uint32Pair splitUint32Pair(int value) {
+  // These JavaScript-only guards run in the Chrome test job. The VM coverage
+  // upload cannot execute them because kIntIsImprecise is false there.
+  // coverage:ignore-start
   if (kIntIsImprecise) {
     if (value < 0 || value > 9007199254740992 /* 2^53 */) {
       throw UnsupportedError(
@@ -72,6 +79,7 @@ Uint32Pair splitUint32Pair(int value) {
     final low = value - high * 0x100000000;
     return (high: high, low: low);
   }
+  // coverage:ignore-end
   // Native VM: int is a full 64-bit two's complement integer. `>>` is an
   // arithmetic (sign-extending) shift, and `& 0xFFFFFFFF` keeps only the
   // low 32 bits of the result, so this reproduces the same bit pattern
