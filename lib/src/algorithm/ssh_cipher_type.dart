@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/algorithm/ssh_crypto_backend.dart';
 import 'package:dartssh2/src/ssh_algorithm.dart';
 import 'package:pointycastle/export.dart';
 
@@ -139,6 +140,16 @@ class SSHCipherType extends SSHAlgorithm {
     if (iv.length != ivSize) {
       throw ArgumentError.value(iv, 'iv', 'IV must be $ivSize bytes long');
     }
+
+    // After the length checks, so a backend is never handed something this
+    // would have refused, and before the factory, so nothing is built twice.
+    final native = sshCryptoBackend?.createBlockCipher(
+      name,
+      key,
+      iv,
+      forEncryption: forEncryption,
+    );
+    if (native != null) return native;
 
     final cipher = factory();
     cipher.init(forEncryption, ParametersWithIV(KeyParameter(key), iv));

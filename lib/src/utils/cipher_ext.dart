@@ -1,14 +1,22 @@
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/algorithm/ssh_crypto_backend.dart';
 import 'package:pointycastle/pointycastle.dart';
 
 extension BlockCipherX on BlockCipher {
   Uint8List processAll(Uint8List data) {
-    final result = Uint8List(data.length);
-
     if (data.length % blockSize != 0) {
       throw FormatException('input ${data.length} not multiple of $blockSize');
     }
+
+    // A cipher that can take the whole packet is given the whole packet. The
+    // loop below is the cheapest thing to do for an implementation in this
+    // isolate and the most expensive one for a backend that pays per call —
+    // see [SSHBulkBlockCipher].
+    final self = this;
+    if (self is SSHBulkBlockCipher) return self.processBulk(data);
+
+    final result = Uint8List(data.length);
 
     for (var offset = 0; offset < data.length; offset += blockSize) {
       processBlock(data, offset, result, offset);

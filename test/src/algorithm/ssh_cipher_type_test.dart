@@ -3,7 +3,6 @@ import 'dart:mirrors';
 
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dartssh2/src/ssh_algorithm.dart';
-import 'package:dartssh2/src/utils/cipher_ext.dart';
 import 'package:test/test.dart';
 
 void main() {
