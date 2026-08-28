@@ -21,6 +21,9 @@ class OpenSSHKeyPairs {
   /// Magic header identifier for OpenSSH private key files.
   static const magic = 'openssh-key-v1';
 
+  /// Default bcrypt PBKDF rounds used by current OpenSSH releases.
+  static const defaultBcryptRounds = 24;
+
   /// Name of the algorithm used to encrypt the private key. 'none' means no
   /// encryption.
   final String cipherName;
@@ -57,6 +60,63 @@ class OpenSSHKeyPairs {
   })  : cipherName = 'none',
         kdfName = 'none',
         kdfOptions = null;
+
+  /// Creates a passphrase-protected OpenSSH private-key container.
+  ///
+  /// OpenSSH writes new-format private keys with `aes256-ctr` and derives its
+  /// key and IV together with `bcrypt_pbkdf`.
+  factory OpenSSHKeyPairs.encrypted({
+    required List<Uint8List> publicKeys,
+    required Uint8List unencryptedPrivateKeyBlob,
+    required String passphrase,
+    int rounds = defaultBcryptRounds,
+  }) {
+    if (passphrase.isEmpty) {
+      throw ArgumentError.value(passphrase, 'passphrase', 'must not be empty');
+    }
+    if (rounds <= 0) {
+      throw ArgumentError.value(rounds, 'rounds', 'must be positive');
+    }
+
+    const cipher = SSHCipherType.aes256ctr;
+    final salt = randomBytes(16);
+    final paddedPrivateKeyBlob = BytesBuilder(copy: false)
+      ..add(unencryptedPrivateKeyBlob);
+    for (var paddingByte = 1;
+        paddedPrivateKeyBlob.length % cipher.blockSize != 0;
+        paddingByte++) {
+      paddedPrivateKeyBlob.addByte(paddingByte & 0xff);
+    }
+
+    final passphraseBytes = Uint8List.fromList(utf8.encode(passphrase));
+    final keyAndIv = Uint8List(cipher.keySize + cipher.ivSize);
+    final result = bcrypt_pbkdf(
+      passphraseBytes,
+      passphraseBytes.lengthInBytes,
+      salt,
+      salt.lengthInBytes,
+      keyAndIv,
+      keyAndIv.lengthInBytes,
+      rounds,
+    );
+    if (result != 0) {
+      throw StateError('bcrypt_pbkdf failed while encrypting private key');
+    }
+
+    final key = Uint8List.sublistView(keyAndIv, 0, cipher.keySize);
+    final iv = Uint8List.sublistView(keyAndIv, cipher.keySize);
+    final encryptedPrivateKeyBlob = cipher
+        .createCipher(key, iv, forEncryption: true)
+        .processAll(paddedPrivateKeyBlob.takeBytes());
+
+    return OpenSSHKeyPairs(
+      cipherName: cipher.name,
+      kdfName: 'bcrypt',
+      kdfOptions: OpenSSHBcryptKdfOptions(salt, rounds),
+      publicKeys: publicKeys,
+      privateKeyBlob: encryptedPrivateKeyBlob,
+    );
+  }
 
   /// Decodes OpenSSH private key binary [keyBlob].
   factory OpenSSHKeyPairs.decode(Uint8List keyBlob) {
@@ -182,7 +242,7 @@ class OpenSSHKeyPairs {
 
     final kdfHash = Uint8List(cipher.keySize + cipher.ivSize);
 
-    bcrypt_pbkdf(
+    final result = bcrypt_pbkdf(
       passphrase,
       passphrase.lengthInBytes,
       kdfOptions.salt,
@@ -191,6 +251,9 @@ class OpenSSHKeyPairs {
       kdfHash.lengthInBytes,
       kdfOptions.rounds,
     );
+    if (result != 0) {
+      throw SSHKeyDecryptError('Invalid bcrypt KDF parameters');
+    }
 
     final key = Uint8List.view(kdfHash.buffer, 0, cipher.keySize);
     final iv = Uint8List.view(kdfHash.buffer, cipher.keySize, cipher.ivSize);
@@ -259,8 +322,16 @@ abstract mixin class OpenSSHKeyPair implements SSHKeyPair {
   /// Serializes private key components into [writer].
   void writeTo(SSHMessageWriter writer);
 
+  /// Encodes this key as an OpenSSH private-key PEM.
+  ///
+  /// A non-empty [passphrase] encrypts the private-key section using
+  /// `aes256-ctr` and `bcrypt_pbkdf`. A null or empty passphrase writes the
+  /// unencrypted form. [rounds] controls the bcrypt work factor when encrypted.
   @override
-  String toPem() {
+  String toPem({
+    String? passphrase,
+    int rounds = OpenSSHKeyPairs.defaultBcryptRounds,
+  }) {
     final writer = SSHMessageWriter();
     final checkInt = ByteData.sublistView(randomBytes(4)).getUint32(0);
 
@@ -268,6 +339,15 @@ abstract mixin class OpenSSHKeyPair implements SSHKeyPair {
     writer.writeUint32(checkInt);
     writer.writeUtf8(name);
     writeTo(writer);
+
+    if (passphrase != null && passphrase.isNotEmpty) {
+      return OpenSSHKeyPairs.encrypted(
+        publicKeys: [toPublicKey().encode()],
+        unencryptedPrivateKeyBlob: writer.takeBytes(),
+        passphrase: passphrase,
+        rounds: rounds,
+      ).toPem();
+    }
 
     // pad with bytes 1, 2, 3, ...
     for (var i = 0; writer.length % 8 != 0; i++) {
