@@ -530,6 +530,6 @@ class SSH_Message_Userauth_InfoResponse implements SSHMessage {
 
   @override
   String toString() {
-    return '$runtimeType(responses: $responses)';
+    return '$runtimeType(responses: ${responses.length})';
   }
 }

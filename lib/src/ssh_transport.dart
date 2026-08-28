@@ -242,6 +242,18 @@ class SSHTransport {
   /// when the transport is acting as a server.
   var _hostkeyVerified = false;
 
+  /// Fingerprint of the host key verified during the first key exchange.
+  ///
+  /// Kept so that a later rekey can detect the host key silently changing to
+  /// a different one, which OpenSSH treats as an error: [_hostkeyVerified]
+  /// only latches whether verification ever succeeded, not which key it
+  /// succeeded for.
+  Uint8List? _verifiedHostkeyFingerprint;
+
+  /// Host key type verified during the first key exchange, checked alongside
+  /// [_verifiedHostkeyFingerprint] on rekey.
+  SSHHostkeyType? _verifiedHostkeyType;
+
   /// Shared secret derived from the key exchange process. Kept to derive the
   /// cipher IV, cipher key and MAC key.
   BigInt? _sharedSecret;
@@ -342,6 +354,13 @@ class SSHTransport {
   /// Packets queued during key exchange that will be sent after NEW_KEYS
   final List<Uint8List> _rekeyPendingPackets = [];
 
+  /// Completes when the key exchange a [rekey] call is waiting on reaches
+  /// SSH_MSG_NEWKEYS, or with an error if the connection ends first.
+  ///
+  /// `null` when no caller is waiting: the initial handshake and exchanges
+  /// nobody asked about do not allocate one.
+  Completer<void>? _rekeyCompleter;
+
   /// Sends an SSH packet payload over the transport.
   ///
   /// This method packs the [data], calculates padding and MAC, encrypts the payload
@@ -393,12 +412,13 @@ class SSHTransport {
       // Create a custom packet structure for ETM mode
       // We need to ensure that the payload we're encrypting is a multiple of the block size
 
-      // Calculate the padding length to ensure the total length is a multiple of the block size
-      // We need to account for the 1 byte padding length field
-      final paddingLength = blockSize - ((data.length + 1) % blockSize);
-      // Ensure padding is at least 4 bytes as per SSH spec
-      final adjustedPaddingLength =
-          paddingLength < 4 ? paddingLength + blockSize : paddingLength;
+      // Calculate the padding length to ensure the total length is a
+      // multiple of the block size (accounting for the 1 byte padding
+      // length field), enforcing the SSH-mandated 4 byte minimum.
+      final adjustedPaddingLength = _alignedPaddingLength(
+        data.length,
+        blockSize,
+      );
 
       // Calculate the total packet length (excluding the length field itself)
       final packetLength = 1 + data.length + adjustedPaddingLength;
@@ -412,11 +432,12 @@ class SSHTransport {
       payloadToEncrypt[0] = adjustedPaddingLength; // Set padding length
       payloadToEncrypt.setRange(1, 1 + data.length, data); // Copy data
 
-      // Add random padding
-      for (var i = 0; i < adjustedPaddingLength; i++) {
-        payloadToEncrypt[1 + data.length + i] =
-            (DateTime.now().microsecondsSinceEpoch + i) & 0xFF;
-      }
+      // Add random padding (RFC 4253 §6 requires it).
+      payloadToEncrypt.setRange(
+        1 + data.length,
+        packetLength,
+        randomBytes(adjustedPaddingLength),
+      );
 
       // Verify that the payload length is a multiple of the block size
       if (payloadToEncrypt.length % blockSize != 0) {
@@ -507,12 +528,9 @@ class SSHTransport {
 
     final plaintext = Uint8List(packetLength)
       ..[0] = paddingLength
-      ..setRange(1, 1 + data.length, data);
-
-    for (var i = 0; i < paddingLength; i++) {
-      plaintext[1 + data.length + i] =
-          (DateTime.now().microsecondsSinceEpoch + i) & 0xff;
-    }
+      ..setRange(1, 1 + data.length, data)
+      // RFC 4253 §6 requires the padding to consist of random bytes.
+      ..setRange(1 + data.length, packetLength, randomBytes(paddingLength));
 
     final encrypted = _processAead(
       key: _localCipherKey!,
@@ -576,6 +594,10 @@ class SSHTransport {
     _socketSubscription?.cancel();
     _socketSubscription = null;
     _doneCompleter.complete();
+    _failPendingRekey(
+      SSHStateError('Transport closed before the key exchange completed'),
+      StackTrace.current,
+    );
     await socket.close();
   }
 
@@ -586,6 +608,7 @@ class SSHTransport {
     _socketSubscription?.cancel();
     _socketSubscription = null;
     _doneCompleter.completeError(error, stackTrace ?? StackTrace.current);
+    _failPendingRekey(error, stackTrace ?? StackTrace.current);
     socket.destroy();
   }
 
@@ -658,47 +681,89 @@ class SSHTransport {
     }
   }
 
+  /// Maximum number of pre-banner lines accepted before the identification
+  /// line. RFC 4253 §4.2 puts no limit on them; OpenSSH stops after 1024 and
+  /// so do we, so that a server streaming lines forever cannot keep a client
+  /// busy indefinitely. This library has no handshake timeout to fall back on.
+  static const _maxPreBannerLines = 1024;
+
+  /// Pre-banner lines skipped so far. Persists across calls to
+  /// [_processVersionExchange] because the cap has to bound the whole
+  /// exchange, not a single pass over the buffer.
+  var _preBannerLines = 0;
+
   /// Parses the SSH protocol banner/version string sent by the remote host.
+  ///
+  /// This may be called multiple times as the socket delivers more data: if
+  /// the buffer does not yet contain a full line, it simply waits for the
+  /// next call instead of failing, since a banner routinely arrives split
+  /// across multiple TCP segments or WebSocket frames.
   void _processVersionExchange() {
     printDebug?.call('SSHTransport._processVersionExchange');
 
-    if (_buffer.length > 10240) {
-      throw SSHHandshakeError('Version exchange too long');
-    }
-
-    final bufferString = latin1.decode(_buffer.data);
-
-    // SSH version exchange is terminated by \r\n.
-    var index = bufferString.indexOf('\r\n');
-    if (index == -1) {
-      // In the (rare) case SSH-2 version string is terminated by \n only (observed on Synology DS120j 2021)
-      index = bufferString.indexOf('\n');
-      if (index == -1) {
-        throw SSHHandshakeError('Version exchange not terminated');
+    // RFC 4253 §4.2 allows the server to send arbitrary lines of text before
+    // its identification line. Skip any such lines until the real
+    // "SSH-" identification line arrives (or the buffer runs out).
+    while (true) {
+      if (_buffer.length > 10240) {
+        throw SSHHandshakeError('Version exchange too long');
       }
-      _buffer.consume(index + 1);
-    } else {
-      _buffer.consume(index + 2);
+
+      final bufferString = latin1.decode(_buffer.data);
+
+      // SSH version exchange is terminated by \r\n.
+      var index = bufferString.indexOf('\r\n');
+      int lineEnd;
+      if (index == -1) {
+        // In the (rare) case SSH-2 version string is terminated by \n only (observed on Synology DS120j 2021)
+        index = bufferString.indexOf('\n');
+        if (index == -1) {
+          // The line is not complete yet. Wait for more data to arrive from
+          // the socket instead of failing; _onSocketData will call us again.
+          return;
+        }
+        lineEnd = index + 1;
+      } else {
+        lineEnd = index + 2;
+      }
+
+      final versionString = bufferString.substring(0, index);
+
+      if (!versionString.startsWith('SSH-')) {
+        // A pre-banner line: discard it and keep looking for the
+        // identification line.
+        _preBannerLines++;
+        if (_preBannerLines > _maxPreBannerLines) {
+          throw SSHHandshakeError(
+            'Too many lines before the version string '
+            '(more than $_maxPreBannerLines)',
+          );
+        }
+        _buffer.consume(lineEnd);
+        continue;
+      }
+
+      _buffer.consume(lineEnd);
+
+      // RFC compatibility: SSH-1.99 banners indicate SSH-2 support with SSH-1 fallback.
+      if (!(versionString.startsWith('SSH-2.0-') ||
+          versionString.startsWith('SSH-1.99-'))) {
+        socket.sink.add(latin1.encode('Protocol mismatch\r\n'));
+        throw SSHHandshakeError('Invalid version: $versionString');
+      }
+
+      printTrace?.call('<- $socket: $versionString');
+      printDebug?.call('SSHTransport._remoteVersion = "$versionString"');
+      _remoteVersion = versionString;
+
+      if (isServer) {
+        _sendKexInit();
+      }
+
+      // There maybe more data in the buffer, so it will be consumed by the
+      // asynchronous packet processing queue.
+      return;
     }
-
-    final versionString = bufferString.substring(0, index);
-    // RFC compatibility: SSH-1.99 banners indicate SSH-2 support with SSH-1 fallback.
-    if (!(versionString.startsWith('SSH-2.0-') ||
-        versionString.startsWith('SSH-1.99-'))) {
-      socket.sink.add(latin1.encode('Protocol mismatch\r\n'));
-      throw SSHHandshakeError('Invalid version: $versionString');
-    }
-
-    printTrace?.call('<- $socket: $versionString');
-    printDebug?.call('SSHTransport._remoteVersion = "$versionString"');
-    _remoteVersion = versionString;
-
-    if (isServer) {
-      _sendKexInit();
-    }
-
-    // There maybe more data in the buffer, so it will be consumed by the
-    // asynchronous packet processing queue.
   }
 
   /// Process one or more SSH packets queued in [_buffer].
@@ -711,9 +776,12 @@ class SSHTransport {
         break;
       }
 
-      // if (payload.length > SSHPacket.maxPayloadLength) {
-      //   throw SSHPacketError('Packet too long: ${payload.length}');
-      // }
+      // Note: no payload-specific length check here. RFC 4253 §6.1's 32768
+      // byte figure is the payload size every implementation must *accept*,
+      // not a cap: a peer honouring our advertised 32768 byte channel packet
+      // size still sends SSH_MSG_CHANNEL_DATA payloads of 32768 + 9 bytes of
+      // message header. [SSHPacket.maxLength] (35000), enforced in
+      // [_verifyPacketLength], is the bound that actually applies.
 
       await _handleMessage(payload);
 
@@ -751,9 +819,6 @@ class SSHTransport {
       _remotePacketSN.value,
     );
     _verifyPacketLength(packetLength);
-    if (packetLength < 5) {
-      throw SSHPacketError('Packet too short: $packetLength');
-    }
     if (packetLength % OpenSSHChaCha20Poly1305.blockSize != 0) {
       throw SSHPacketError(
         'Invalid packet alignment: $packetLength is not a multiple of '
@@ -938,12 +1003,17 @@ class SSHTransport {
       }
 
       final packet = _decryptBuffer.consume(packetLength + 4);
+
+      // Authenticate before interpreting any attacker-controlled field of
+      // the decrypted packet. Checking the padding length first would make
+      // a padding error distinguishable from a MAC error, i.e. a padding
+      // oracle.
+      final mac = _buffer.consume(macLength);
+      _verifyPacketMac(packet, mac, isEncrypted: false);
+
       final paddingLength = SSHPacket.readPaddingLength(packet);
       final payloadLength = packetLength - paddingLength - 1;
       _verifyPacketPadding(payloadLength, paddingLength);
-
-      final mac = _buffer.consume(macLength);
-      _verifyPacketMac(packet, mac, isEncrypted: false);
 
       return Uint8List.sublistView(packet, 5, packet.length - paddingLength);
     }
@@ -987,6 +1057,11 @@ class SSHTransport {
 
     final paddingLength = plaintext[0];
     final payloadLength = packetLength - paddingLength - 1;
+    if (payloadLength < 0) {
+      throw SSHPacketError(
+        'Invalid padding length: $paddingLength for packet length $packetLength',
+      );
+    }
 
     final minPaddingLength =
         _alignedPaddingLength(payloadLength, cipherType.blockSize);
@@ -1000,7 +1075,15 @@ class SSHTransport {
   }
 
   /// Validates that the parsed packet length is within acceptable bounds.
+  ///
+  /// The lower bound (5) is the minimum a well-formed packet can be: the 1
+  /// byte padding length field plus the mandatory 4 byte minimum padding.
+  /// Without it, a packetLength of 0-4 makes [SSHPacket.readPaddingLength]
+  /// read past the data actually received for the packet.
   void _verifyPacketLength(int packetLength) {
+    if (packetLength < 5) {
+      throw SSHPacketError('Packet too short: $packetLength');
+    }
     if (packetLength > SSHPacket.maxLength) {
       throw SSHPacketError('Packet too long: $packetLength');
     }
@@ -1056,10 +1139,11 @@ class SSHTransport {
 
     final expectedMac = _remoteMac!.finish();
 
-    if (!expectedMac.equals(actualMac)) {
-      throw SSHPacketError(
-        'MAC mismatch, expected: $expectedMac, actual: $actualMac',
-      );
+    if (!constantTimeEquals(expectedMac, actualMac)) {
+      // Deliberately does not include the expected or actual MAC bytes: for
+      // an attacker choosing the ciphertext, an expected-MAC value leaked
+      // through a log would be a forgery oracle.
+      throw SSHPacketError('MAC mismatch');
     }
   }
 
@@ -1771,6 +1855,24 @@ class SSHTransport {
     final fingerprint = _hostkeyFingerprint(hostkey);
 
     if (_hostkeyVerified) {
+      // The signature above is re-checked on every rekey, but that only
+      // proves the *current* host key is self-consistent, not that it is
+      // the same key the user (or [onVerifyHostKey]) already approved.
+      // OpenSSH rejects a host key change during rekey; do the same.
+      final verifiedFingerprint = _verifiedHostkeyFingerprint;
+      if (verifiedFingerprint == null ||
+          _verifiedHostkeyType != _hostkeyType ||
+          !constantTimeEquals(verifiedFingerprint, fingerprint)) {
+        closeWithError(
+          SSHHostkeyError(
+            'Host key changed during rekey: was $_verifiedHostkeyType '
+            '${utf8.decode(verifiedFingerprint ?? Uint8List(0), allowMalformed: true)}, '
+            'now $_hostkeyType '
+            '${utf8.decode(fingerprint, allowMalformed: true)}',
+          ),
+        );
+        return;
+      }
       _sendNewKeys();
       _applyLocalKeys();
       return;
@@ -1791,6 +1893,8 @@ class SSHTransport {
     }
 
     _hostkeyVerified = true;
+    _verifiedHostkeyFingerprint = fingerprint;
+    _verifiedHostkeyType = _hostkeyType;
     _sendNewKeys();
     _applyLocalKeys();
     onReady?.call();
@@ -1835,18 +1939,73 @@ class SSHTransport {
     for (final packet in pending) {
       sendPacket(packet);
     }
+
+    final rekeyCompleter = _rekeyCompleter;
+    _rekeyCompleter = null;
+    rekeyCompleter?.complete();
   }
 
   /// Initiates a client-side re-key operation. This can be called
   /// by client code to refresh session keys when needed.
-  void rekey() {
+  ///
+  /// The returned future completes when the exchange reaches
+  /// SSH_MSG_NEWKEYS. If an exchange is already running, whether this side
+  /// or the peer started it, no second one is sent and the future tracks the
+  /// exchange in flight. If the connection ends before new keys are in place
+  /// the future completes with the error that ended it, or with an
+  /// [SSHStateError] on an orderly close.
+  Future<void> rekey() {
     printDebug?.call('SSHTransport.rekey');
-    if (_kexInProgress) {
-      printDebug
-          ?.call('Key exchange already in progress, ignoring rekey request');
-      return;
+
+    if (isClosed) {
+      final failed = Future<void>.error(
+        SSHStateError('Transport is closed'),
+        StackTrace.current,
+      );
+
+      // Same guard as [_waitForNewKeys]: a caller that drops this future the
+      // way the old `void` signature forced must not leak the error to their
+      // zone. Marking it handled here does not take it from a caller who does
+      // await, a future can carry more than one listener.
+      failed.catchError((_) {});
+
+      return failed;
     }
+
+    final future = _waitForNewKeys();
+
+    if (_kexInProgress) {
+      printDebug?.call(
+        'Key exchange already in progress, waiting for it instead of '
+        'starting another',
+      );
+      return future;
+    }
+
     _sendKexInit();
+    return future;
+  }
+
+  /// The future of the [_rekeyCompleter], creating it if no caller is waiting
+  /// on the current exchange yet.
+  Future<void> _waitForNewKeys() {
+    final completer = _rekeyCompleter ??= Completer<void>();
+
+    // A caller is free to drop the future, and the connection dying is not an
+    // unhandled error just because nobody looked. This listener marks the
+    // error handled without taking it away from the caller: the completer's
+    // future can carry more than one.
+    completer.future.catchError((_) {});
+
+    return completer.future;
+  }
+
+  /// Fails a [rekey] future that will never see its NEW_KEYS because the
+  /// connection ended first.
+  void _failPendingRekey(Object error, StackTrace stackTrace) {
+    final rekeyCompleter = _rekeyCompleter;
+    _rekeyCompleter = null;
+    rekeyCompleter?.completeError(error, stackTrace);
   }
 
   /// Determines if a packet should bypass the rekey buffer.

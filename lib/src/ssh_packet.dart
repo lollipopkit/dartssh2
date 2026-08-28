@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/utils/list.dart';
+
 /// Contains rfc4253 packet format related constants and helper functions.
 abstract class SSHPacket {
   /// The maximum size of a packet including the header and MAC.
@@ -46,7 +48,8 @@ abstract class SSHPacket {
     final result = BytesBuilder(copy: false);
     result.add(Uint8List.view(header.buffer));
     result.add(payload);
-    result.add(Uint8List(padding));
+    // RFC 4253 §6 requires the padding to consist of random bytes.
+    result.add(randomBytes(padding));
     return result.takeBytes();
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/ssh_errors.dart';
 import 'package:dartssh2/src/ssh_kex.dart';
 import 'package:dartssh2/src/utils/bigint.dart';
 import 'package:dartssh2/src/utils/list.dart';
@@ -79,11 +80,30 @@ class SSHKexDH implements SSHKex {
 
   /// Compute the shared secret K
   BigInt computeSecret(BigInt f) {
+    _validateRemotePublicValue(f);
     return f.modPow(x, p);
   }
 
   Future<BigInt> computeSecretAsync(BigInt f) async {
+    _validateRemotePublicValue(f);
     return sshCompute(_computeDHSecret, (f, x, p));
+  }
+
+  /// Validates the peer's public value `f`.
+  ///
+  /// https://tools.ietf.org/html/rfc4253#section-8 says "Values of 'e' or 'f'
+  /// that are not in the range [1, p-1] MUST NOT be sent or accepted by
+  /// either side", which read literally still admits `1` and `p - 1`. Both
+  /// are degenerate: `f == 1` makes the shared secret `1` for any exponent,
+  /// and `f == p - 1` confines it to `{1, p - 1}`. The check below is
+  /// therefore the strict `1 < f < p - 1`, which is what OpenSSH enforces.
+  /// Do not loosen it back to the RFC's literal bound.
+  void _validateRemotePublicValue(BigInt f) {
+    if (f <= BigInt.one || f >= p - BigInt.one) {
+      throw SSHHandshakeError(
+        'Invalid DH public value: f must satisfy 1 < f < p - 1',
+      );
+    }
   }
 }
 

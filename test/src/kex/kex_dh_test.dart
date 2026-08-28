@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/kex/kex_dh.dart';
+import 'package:dartssh2/src/ssh_errors.dart';
 import 'package:dartssh2/src/utils/bigint.dart';
 import 'package:test/test.dart';
 
@@ -56,6 +57,80 @@ void main() {
 
       final computedSecret = kex.computeSecret(f);
       expect(computedSecret, equals(isA<BigInt>()));
+    });
+  });
+
+  group('SSHKexDH public value validation (RFC 4253 §8: 1 < f < p - 1)', () {
+    test('rejects f = 0', () {
+      final kex = SSHKexDH.group14();
+      expect(
+        () => kex.computeSecret(BigInt.zero),
+        throwsA(isA<SSHHandshakeError>()),
+      );
+    });
+
+    test('rejects f = 1', () {
+      final kex = SSHKexDH.group14();
+      expect(
+        () => kex.computeSecret(BigInt.one),
+        throwsA(isA<SSHHandshakeError>()),
+      );
+    });
+
+    test('rejects f = p - 1', () {
+      final kex = SSHKexDH.group14();
+      expect(
+        () => kex.computeSecret(kex.p - BigInt.one),
+        throwsA(isA<SSHHandshakeError>()),
+      );
+    });
+
+    test('rejects f = p', () {
+      final kex = SSHKexDH.group14();
+      expect(
+        () => kex.computeSecret(kex.p),
+        throwsA(isA<SSHHandshakeError>()),
+      );
+    });
+
+    test('rejects f = p + 1', () {
+      final kex = SSHKexDH.group14();
+      expect(
+        () => kex.computeSecret(kex.p + BigInt.one),
+        throwsA(isA<SSHHandshakeError>()),
+      );
+    });
+
+    test('same rejections apply to computeSecretAsync', () async {
+      final kex = SSHKexDH.group14();
+      for (final f in [
+        BigInt.zero,
+        BigInt.one,
+        kex.p - BigInt.one,
+        kex.p,
+        kex.p + BigInt.one,
+      ]) {
+        await expectLater(
+          () => kex.computeSecretAsync(f),
+          throwsA(isA<SSHHandshakeError>()),
+        );
+      }
+    });
+
+    test(
+        'a legitimate f still produces the same shared secret as before '
+        '(no regression)', () {
+      final kex1 = SSHKexDH.group14();
+      final kex2 = SSHKexDH.group14();
+
+      // Same computation the old, unvalidated implementation performed.
+      final expected = kex2.e.modPow(kex1.x, kex1.p);
+
+      final secret = kex1.computeSecret(kex2.e);
+      expect(secret, equals(expected));
+
+      // And the two sides still agree, as a DH exchange requires.
+      expect(secret, equals(kex2.computeSecret(kex1.e)));
     });
   });
 
