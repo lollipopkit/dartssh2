@@ -721,7 +721,9 @@ void main() {
       await expectLater(transport.rekey(), throwsA(isA<SSHStateError>()));
     });
 
-    test('dropping the future does not raise an unhandled error', () async {
+    test(
+        'dropping the future of a live rekey does not raise an unhandled error',
+        () async {
       final uncaught = <Object>[];
       final settled = Completer<void>();
 
@@ -748,6 +750,41 @@ void main() {
 
       await settled.future;
       // Give the zone a chance to report a dropped error before asserting.
+      await pumpEventQueue();
+
+      expect(uncaught, isEmpty);
+    });
+
+    test('dropping the future of a rekey on a closed transport stays silent',
+        () async {
+      // The other door into the same case: the early return for a closed
+      // transport hands back its error future without going through the
+      // completer, so it needs its own guard and its own test. The live-rekey
+      // case above does not reach it, and the closed-transport case awaits,
+      // so neither one would catch a regression here.
+      final uncaught = <Object>[];
+      final settled = Completer<void>();
+
+      await runZonedGuarded(
+        () async {
+          final socket = _CaptureSSHSocket();
+          final transport = SSHTransport(
+            socket,
+            disableHostkeyVerification: true,
+          );
+          primeForRekey(transport, socket);
+
+          transport.done.catchError((_) {});
+          await transport.close();
+
+          // Dropped, the way the old `void` signature forced.
+          transport.rekey();
+          settled.complete();
+        },
+        (error, stackTrace) => uncaught.add(error),
+      );
+
+      await settled.future;
       await pumpEventQueue();
 
       expect(uncaught, isEmpty);

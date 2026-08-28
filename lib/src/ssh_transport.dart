@@ -1958,10 +1958,18 @@ class SSHTransport {
     printDebug?.call('SSHTransport.rekey');
 
     if (isClosed) {
-      return Future.error(
+      final failed = Future<void>.error(
         SSHStateError('Transport is closed'),
         StackTrace.current,
       );
+
+      // Same guard as [_waitForNewKeys]: a caller that drops this future the
+      // way the old `void` signature forced must not leak the error to their
+      // zone. Marking it handled here does not take it from a caller who does
+      // await, a future can carry more than one listener.
+      failed.catchError((_) {});
+
+      return failed;
     }
 
     final future = _waitForNewKeys();
