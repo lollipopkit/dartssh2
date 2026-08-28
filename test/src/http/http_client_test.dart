@@ -77,6 +77,92 @@ void main() {
       expect(socket.closed, isTrue);
     });
 
+    test('a 204 response is complete without waiting for the peer to close',
+        () async {
+      // No Content-Length, and the socket never ends on its own. Reading to
+      // end of stream here would hang; a 204 has no body by definition.
+      final socket = _FakeSocket(
+        [
+          'HTTP/1.1 204 No Content\r\n',
+          'server: test\r\n',
+          '\r\n',
+        ],
+        keepOpen: true,
+      );
+
+      final response = await SSHHttpClientResponse.from(socket);
+
+      expect(response.statusCode, 204);
+      expect(response.body, isEmpty);
+      expect(socket.closed, isTrue);
+    });
+
+    test('a 304 response is complete without waiting for the peer to close',
+        () async {
+      final socket = _FakeSocket(
+        [
+          'HTTP/1.1 304 Not Modified\r\n',
+          'etag: "abc"\r\n',
+          '\r\n',
+        ],
+        keepOpen: true,
+      );
+
+      final response = await SSHHttpClientResponse.from(socket);
+
+      expect(response.statusCode, 304);
+      expect(response.body, isEmpty);
+      expect(response.headers.value('etag'), '"abc"');
+      expect(socket.closed, isTrue);
+    });
+
+    test('a response to HEAD ignores Content-Length and reads no body',
+        () async {
+      // Content-Length on a HEAD response describes the body the equivalent
+      // GET would have returned, not what is on the wire. Reading it would
+      // wait for 11 bytes that are never sent.
+      final socket = _FakeSocket(
+        [
+          'HTTP/1.1 200 OK\r\n',
+          'content-length: 11\r\n',
+          '\r\n',
+        ],
+        keepOpen: true,
+      );
+
+      final response = await SSHHttpClientResponse.from(socket, method: 'HEAD');
+
+      expect(response.statusCode, 200);
+      expect(response.body, isEmpty);
+      expect(response.headers.contentLength, 11);
+      expect(socket.closed, isTrue);
+    });
+
+    test('idleTimeout bounds a body that is delimited by connection close',
+        () async {
+      // A 200 with neither Content-Length nor chunked encoding is read to
+      // end of stream. This peer sends the headers and then goes quiet
+      // without closing, which is exactly the case that used to hang.
+      final socket = _FakeSocket(
+        [
+          'HTTP/1.1 200 OK\r\n',
+          'content-type: text/plain\r\n',
+          '\r\n',
+          'partial',
+        ],
+        keepOpen: true,
+      );
+
+      await expectLater(
+        SSHHttpClientResponse.from(
+          socket,
+          idleTimeout: const Duration(milliseconds: 50),
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(socket.closed, isTrue);
+    });
+
     test('throws for unsupported transfer encoding', () async {
       final socket = _FakeSocket([
         'HTTP/1.1 200 OK\r\n',
@@ -342,18 +428,37 @@ void main() {
 }
 
 class _FakeSocket implements SSHSocket {
-  _FakeSocket(List<String> chunks)
+  _FakeSocket(List<String> chunks, {this.keepOpen = false})
       : _chunks = chunks
             .map((chunk) => Uint8List.fromList(chunk.codeUnits))
             .toList(growable: false);
 
+  /// When true the response stream delivers [_chunks] and then stays open
+  /// indefinitely, the way a peer that never closes the connection behaves.
+  /// Reading a response to end of stream can only be proven to stop early
+  /// against a socket that never ends on its own.
+  final bool keepOpen;
+
   final List<Uint8List> _chunks;
   final _sinkController = StreamController<List<int>>();
   final _doneCompleter = Completer<void>();
+  StreamController<Uint8List>? _streamController;
   bool closed = false;
 
   @override
-  Stream<Uint8List> get stream => Stream<Uint8List>.fromIterable(_chunks);
+  Stream<Uint8List> get stream {
+    if (!keepOpen) return Stream<Uint8List>.fromIterable(_chunks);
+
+    var controller = _streamController;
+    if (controller == null) {
+      controller = StreamController<Uint8List>();
+      _streamController = controller;
+      for (final chunk in _chunks) {
+        controller.add(chunk);
+      }
+    }
+    return controller.stream;
+  }
 
   @override
   StreamSink<List<int>> get sink => _sinkController.sink;
@@ -367,6 +472,7 @@ class _FakeSocket implements SSHSocket {
     if (!_doneCompleter.isCompleted) {
       _doneCompleter.complete();
     }
+    unawaited(_streamController?.close());
     await _sinkController.close();
   }
 

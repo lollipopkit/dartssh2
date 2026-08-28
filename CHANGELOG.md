@@ -18,6 +18,8 @@
 - Fixed `SftpFileWriter` hanging forever when the local stream raised. Errors had no handler and `_handleLocalDone` completed the done future unguarded, so a failing upload never returned and could also double-complete [#230].
 - Fixed an HTTP response body being discarded when the server sends no `Content-Length`. The body was read only up to a length that stayed 0, so whether it survived depended on TCP segment boundaries [#230].
 - Fixed `HttpHeaders.host` and `HttpHeaders.port` returning null for a perfectly valid `Host` header [#230].
+- Fixed a response that carries no body being read until the peer closes the connection. A 1xx, 204 or 304 response, and any response to `HEAD`, has no body whatever its framing headers say, so a server that keeps the connection open after sending one left the read waiting for bytes that were never coming. This was the sharp edge of reading unframed bodies to end of stream, added above [#230].
+- Added `SSHHttpClient.idleTimeout`, which bounds the wait between two pieces of a response. A body delimited by connection close still has to be read to end of stream, and nothing else in the client bounded that, so a peer that stopped sending without closing could hang a request indefinitely. It is an inactivity timeout rather than a deadline for the whole response, so a large body that keeps arriving is never cut short; leaving it null keeps the unbounded behaviour [#230].
 - Added overflow protection to the SFTP request id counter [#230].
 
 ## [3.3.1] - 2026-08-19
