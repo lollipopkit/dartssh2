@@ -582,8 +582,12 @@ class SSHTransport {
 
     final nonce = Uint8List.fromList(iv);
     final view = ByteData.sublistView(nonce);
-    final counter = view.getUint64(4);
-    view.setUint64(4, counter + sequence);
+    // Two 32-bit words with carry rather than getUint64/setUint64 (which
+    // throw when compiled to JavaScript): see utils/int.dart. This also
+    // sidesteps combining the counter into a single int, which matters
+    // here because the counter is derived from key material and routinely
+    // has its top bit set.
+    view.addToUint64Split(4, sequence);
     return nonce;
   }
 
@@ -997,9 +1001,19 @@ class SSHTransport {
         return null;
       }
 
-      while (_decryptBuffer.length < 4 + packetLength) {
-        final block = _buffer.consume(blockSize);
-        _decryptBuffer.add(_decryptCipher!.process(block));
+      final encryptedPacketLength = 4 + packetLength;
+      if (encryptedPacketLength % blockSize != 0) {
+        throw SSHPacketError(
+          'Encrypted packet length $encryptedPacketLength is not a multiple '
+          'of block size $blockSize',
+        );
+      }
+
+      final remaining = encryptedPacketLength - _decryptBuffer.length;
+      if (remaining > 0) {
+        _decryptBuffer.add(
+          _decryptCipher!.processAll(_buffer.consume(remaining)),
+        );
       }
 
       final packet = _decryptBuffer.consume(packetLength + 4);

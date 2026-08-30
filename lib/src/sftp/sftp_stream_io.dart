@@ -31,8 +31,10 @@ class SftpFileWriter with DoneFuture {
   /// Creates a new [SftpFileWriter]. The upload process is started immediately
   /// after construction.
   SftpFileWriter(this.file, this.stream, this.offset, this.onProgress) {
-    _subscription =
-        stream.transform(MaxChunkSize(chunkSize)).listen(_handleLocalData);
+    _subscription = stream.transform(MaxChunkSize(chunkSize)).listen(
+          _handleLocalData,
+          onError: _handleLocalError,
+        );
 
     _subscription.onDone(_handleLocalDone);
   }
@@ -72,7 +74,7 @@ class SftpFileWriter with DoneFuture {
   ///
   /// Calling [abort] will make [done] to complete immediately.
   Future<void> abort() async {
-    _doneCompleter.complete();
+    _completeSuccessfully();
     await _subscription.cancel();
   }
 
@@ -107,7 +109,13 @@ class SftpFileWriter with DoneFuture {
 
     final chunkWriteOffset = offset + _bytesSent;
     _bytesSent += chunk.length;
-    await file.writeBytes(chunk, offset: chunkWriteOffset);
+
+    try {
+      await file.writeBytes(chunk, offset: chunkWriteOffset);
+    } catch (error, stackTrace) {
+      await _failWith(error, stackTrace);
+      return;
+    }
 
     _bytesAcked += chunk.length;
     onProgress?.call(_bytesAcked);
@@ -116,9 +124,34 @@ class SftpFileWriter with DoneFuture {
       _subscription.resume();
     }
 
-    if (_streamDone &&
-        _bytesSent == _bytesAcked &&
-        !_doneCompleter.isCompleted) {
+    if (_streamDone && _bytesSent == _bytesAcked) {
+      _completeSuccessfully();
+    }
+  }
+
+  /// Handles an error emitted directly by [stream] (as opposed to an error
+  /// thrown while writing a chunk to the remote file, which is handled in
+  /// [_handleLocalData]).
+  ///
+  /// Without this, an error from the source stream would escape as an
+  /// unhandled zone exception, and [done] would never complete.
+  Future<void> _handleLocalError(Object error, StackTrace stackTrace) async {
+    await _failWith(error, stackTrace);
+  }
+
+  /// Completes [_doneCompleter] with [error] (if it hasn't already completed)
+  /// and stops the subscription so no further chunks are processed.
+  Future<void> _failWith(Object error, StackTrace stackTrace) async {
+    if (!_doneCompleter.isCompleted) {
+      _doneCompleter.completeError(error, stackTrace);
+    }
+    await _subscription.cancel();
+  }
+
+  /// Completes [_doneCompleter] successfully, guarding against a completer
+  /// that has already completed (successfully or with an error).
+  void _completeSuccessfully() {
+    if (!_doneCompleter.isCompleted) {
       _doneCompleter.complete();
     }
   }
@@ -132,7 +165,7 @@ class SftpFileWriter with DoneFuture {
   void _handleLocalDone() {
     _streamDone = true;
     if (_bytesSent == _bytesAcked) {
-      _doneCompleter.complete();
+      _completeSuccessfully();
     }
   }
 }

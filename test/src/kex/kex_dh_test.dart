@@ -1,3 +1,10 @@
+// Contains an integer literal (1234567890123456789) that dart2js refuses to
+// compile because it can't be represented exactly as a JS number -- a
+// pre-existing issue unrelated to the 64-bit ByteData fix elsewhere in this
+// branch.
+@TestOn('vm')
+library;
+
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/kex/kex_dh.dart';

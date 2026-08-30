@@ -1,3 +1,9 @@
+// Uses dart:mirrors to reach SSHTransport's private methods; dart:mirrors is
+// VM-only. The web-runnable AEAD coverage lives in
+// ssh_transport_aead_web_test.dart instead.
+@TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:mirrors';
 import 'dart:typed_data';

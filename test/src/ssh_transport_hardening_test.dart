@@ -1,3 +1,7 @@
+// Uses dart:mirrors, which is VM-only.
+@TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:mirrors';
 import 'dart:typed_data';
@@ -192,7 +196,10 @@ void main() {
   });
 
   group('T-05/T-12: non-ETM and ETM round trips still deliver the payload', () {
-    Future<void> roundTrip({required bool useEtm}) async {
+    Future<void> roundTrip({
+      required bool useEtm,
+      int payloadLength = 37,
+    }) async {
       final cipherType = SSHCipherType.aes128ctr;
       final macType = useEtm ? SSHMacType.hmacSha256Etm : SSHMacType.hmacSha256;
       final key = Uint8List.fromList(
@@ -207,7 +214,13 @@ void main() {
       // First byte (message id) is 200, unused by the transport's own
       // dispatch table, so it always falls through to onMessage.
       final payload = Uint8List.fromList(
-        [200, ...List<int>.generate(36, (i) => (i * 5 + 1) & 0xff)],
+        [
+          200,
+          ...List<int>.generate(
+            payloadLength - 1,
+            (i) => (i * 5 + 1) & 0xff,
+          ),
+        ],
       );
 
       final senderSocket = _CaptureSSHSocket();
@@ -264,6 +277,10 @@ void main() {
     test('ETM (encrypt-then-mac)', () async {
       await roundTrip(useEtm: true);
     });
+
+    test('a large non-ETM packet', () async {
+      await roundTrip(useEtm: false, payloadLength: 32 * 1024);
+    });
   });
 
   group(
@@ -316,6 +333,72 @@ void main() {
         () => reflect(transport)
             .invoke(privateSymbol('_consumePacket'), const []),
         throwsA(isA<SSHPacketError>()),
+      );
+
+      transport.close();
+    });
+
+    test(
+        'non-ETM receive rejects an unaligned encrypted packet before '
+        'consuming its remaining ciphertext or MAC', () {
+      final cipherType = SSHCipherType.aes128ctr;
+      final macType = SSHMacType.hmacSha256;
+      final key = Uint8List.fromList(
+        List<int>.generate(cipherType.keySize, (i) => i),
+      );
+      final iv = Uint8List.fromList(
+        List<int>.generate(cipherType.ivSize, (i) => i + 1),
+      );
+      final macKey = Uint8List.fromList(
+        List<int>.generate(macType.keySize, (i) => i + 2),
+      );
+
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket);
+      setPrivate(transport, '_remoteCipherType', cipherType);
+      setPrivate(transport, '_remoteMacType', macType);
+      setPrivate(
+        transport,
+        '_decryptCipher',
+        cipherType.createCipher(key, iv, forEncryption: false),
+      );
+      final remoteMac = macType.createMac(macKey);
+      setPrivate(transport, '_remoteMac', remoteMac);
+
+      // The first decrypted block claims packetLength=20. Including the
+      // four-byte length field gives 24 encrypted bytes, which is not aligned
+      // to AES's 16-byte block size.
+      const packetLength = 20;
+      final firstPlaintextBlock = Uint8List(cipherType.blockSize)
+        ..buffer.asByteData().setUint32(0, packetLength);
+      final firstCiphertextBlock = cipherType
+          .createCipher(key, iv, forEncryption: true)
+          .processAll(firstPlaintextBlock);
+      final bytesAfterFirstBlock =
+          4 + packetLength + remoteMac.macSize - cipherType.blockSize;
+      final input = Uint8List.fromList([
+        ...firstCiphertextBlock,
+        ...Uint8List(bytesAfterFirstBlock),
+      ]);
+
+      final dynamic buffer = getPrivate<dynamic>(transport, '_buffer');
+      buffer.add(input);
+
+      expect(
+        () => reflect(transport)
+            .invoke(privateSymbol('_consumePacket'), const []),
+        throwsA(
+          isA<SSHPacketError>().having(
+            (error) => error.toString(),
+            'message',
+            contains('not a multiple of block size'),
+          ),
+        ),
+      );
+      expect(
+        buffer.length,
+        bytesAfterFirstBlock,
+        reason: 'only the first block needed to read packetLength is consumed',
       );
 
       transport.close();
