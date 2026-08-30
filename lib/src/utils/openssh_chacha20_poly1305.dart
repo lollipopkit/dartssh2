@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dartssh2/src/utils/cipher_ext.dart';
+import 'package:dartssh2/src/utils/int.dart';
 import 'package:pointycastle/export.dart';
 
 /// The packet cipher defined by `chacha20-poly1305@openssh.com`.
@@ -195,7 +196,10 @@ class OpenSSHChaCha20Poly1305 {
     }
 
     final nonce = Uint8List(8);
-    ByteData.sublistView(nonce).setUint64(0, sequenceNumber);
+    // Two 32-bit writes rather than setUint64, which throws when compiled
+    // to JavaScript: see utils/int.dart. sequenceNumber is checked above to
+    // fit in 32 bits, so this is always exact.
+    ByteData.sublistView(nonce).setUint64Split(0, sequenceNumber);
     return nonce;
   }
 

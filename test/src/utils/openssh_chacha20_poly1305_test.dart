@@ -1,3 +1,14 @@
+// PointyCastle's Poly1305 implementation calls into code gated by
+// `PlatformWeb.assertFullWidthInteger`, which throws `UnsupportedError`
+// ("full width integer not supported on this platform") on every call when
+// compiled to JavaScript. That's a pre-existing PointyCastle limitation
+// unrelated to the 64-bit ByteData accessor fix this file's nonce test
+// exercises (see utils/int.dart), so this suite stays VM-only; the AEAD
+// coverage for the web CI job comes from AES-GCM instead (which PointyCastle
+// does support on the web), in ssh_transport_aead_web_test.dart.
+@TestOn('vm')
+library;
+
 import 'dart:typed_data';
 
 import 'package:convert/convert.dart';

@@ -114,13 +114,89 @@ void main() {
       harness.dispose();
     });
 
-    test('read with zero length returns empty stream', () async {
+    test('read with explicit zero length returns empty stream immediately',
+        () async {
       final harness = _SftpTestHarness();
       await harness.completeHandshake();
       final file = SftpFile(harness.client, Uint8List.fromList([1]));
 
+      // An explicit `length: 0` must short-circuit without even calling
+      // stat() or issuing a read request.
       final chunks = await file.read(length: 0).toList();
       expect(chunks, isEmpty);
+
+      harness.dispose();
+    });
+
+    test(
+        'read on a genuinely empty file (stat size 0) resolves promptly '
+        'with no chunks', () async {
+      final harness = _SftpTestHarness();
+      await harness.completeHandshake();
+      final file = SftpFile(harness.client, Uint8List.fromList([1]));
+
+      final readFuture = file.read().toList();
+
+      final statPacket = await harness.nextOutgoingPacket();
+      final fstat = SftpFStatPacket.decode(statPacket);
+      harness.sendResponsePacket(
+        SftpAttrsPacket(fstat.requestId, SftpFileAttrs(size: 0)),
+      );
+
+      // A real read request must still be issued even though stat()
+      // reported size 0 - EOF is what actually terminates the stream.
+      final readPacket = await harness.nextOutgoingPacket();
+      final read = SftpReadPacket.decode(readPacket);
+      harness.sendResponsePacket(
+        SftpStatusPacket(
+          requestId: read.requestId,
+          code: SftpStatusCode.eof,
+          message: '',
+        ),
+      );
+
+      final chunks = await readFuture;
+      expect(chunks, isEmpty);
+
+      harness.dispose();
+    });
+
+    test(
+        'read falls back to EOF-driven reads for virtual files that report '
+        'stat size 0 but actually contain data', () async {
+      final harness = _SftpTestHarness();
+      await harness.completeHandshake();
+      final file = SftpFile(harness.client, Uint8List.fromList([1]));
+
+      final readFuture = file.read().toList();
+
+      final statPacket = await harness.nextOutgoingPacket();
+      final fstat = SftpFStatPacket.decode(statPacket);
+      harness.sendResponsePacket(
+        SftpAttrsPacket(fstat.requestId, SftpFileAttrs(size: 0)),
+      );
+
+      final readPacket = await harness.nextOutgoingPacket();
+      final read = SftpReadPacket.decode(readPacket);
+      harness.sendResponsePacket(
+        SftpDataPacket(read.requestId, Uint8List.fromList([1, 2, 3, 4])),
+      );
+
+      // The short reply triggers a follow-up read to fill out the
+      // original request; respond to it with EOF.
+      final followUpPacket = await harness.nextOutgoingPacket();
+      final followUpRead = SftpReadPacket.decode(followUpPacket);
+      harness.sendResponsePacket(
+        SftpStatusPacket(
+          requestId: followUpRead.requestId,
+          code: SftpStatusCode.eof,
+          message: '',
+        ),
+      );
+
+      final chunks = await readFuture;
+      expect(chunks.length, 1);
+      expect(chunks.first, Uint8List.fromList([1, 2, 3, 4]));
 
       harness.dispose();
     });
