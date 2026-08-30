@@ -243,23 +243,42 @@ class SftpFileAttrs {
   /// Shortcut for [mode]?.type
   SftpFileType? get type => mode?.type;
 
+  /// Writes this [SftpFileAttrs] to [writer].
+  ///
+  /// Per SFTP v3 (draft-ietf-secsh-filexfer-02), the `SSH_FILEXFER_ATTR_UIDGID`
+  /// flag means both [userID] and [groupID] are present on the wire (4 bytes
+  /// each), and `SSH_FILEXFER_ATTR_ACMODTIME` means both [accessTime] and
+  /// [modifyTime] are present. There is no way to signal "only one of the
+  /// pair" without corrupting the packet for the reader (the flag bit is a
+  /// single bit for a 8-byte field). So if only one member of a pair is set,
+  /// that flag is *not* raised and neither value is written - we silently
+  /// drop the lone value rather than inventing a 0 for its sibling, since a
+  /// fabricated 0 (e.g. uid/gid of root, or a Unix-epoch timestamp) would be
+  /// silently and incorrectly applied server-side. Callers that need to set
+  /// just one of uid/gid or atime/mtime should first read the existing pair
+  /// (e.g. via [SftpFile.stat]) and supply both values back.
   void writeTo(SSHMessageWriter writer) {
+    final hasUidGid = userID != null && groupID != null;
+    final hasAcModTime = accessTime != null && modifyTime != null;
+
     var flags = 0;
     if (size != null) flags |= _Flags.size;
-    if (userID != null) flags |= _Flags.uidgid;
-    if (groupID != null) flags |= _Flags.uidgid;
+    if (hasUidGid) flags |= _Flags.uidgid;
     if (mode != null) flags |= _Flags.permissions;
-    if (accessTime != null) flags |= _Flags.acmodtime;
-    if (modifyTime != null) flags |= _Flags.acmodtime;
+    if (hasAcModTime) flags |= _Flags.acmodtime;
     if (extended != null) flags |= _Flags.extended;
 
     writer.writeUint32(flags);
     if (size != null) writer.writeUint64(size!);
-    if (userID != null) writer.writeUint32(userID!);
-    if (groupID != null) writer.writeUint32(groupID!);
+    if (hasUidGid) {
+      writer.writeUint32(userID!);
+      writer.writeUint32(groupID!);
+    }
     if (mode != null) writer.writeUint32(mode!.value);
-    if (accessTime != null) writer.writeUint32(accessTime!);
-    if (modifyTime != null) writer.writeUint32(modifyTime!);
+    if (hasAcModTime) {
+      writer.writeUint32(accessTime!);
+      writer.writeUint32(modifyTime!);
+    }
 
     if (extended != null) {
       writer.writeUint32(extended!.length);

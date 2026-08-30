@@ -1,3 +1,7 @@
+// Uses dart:mirrors, which is VM-only.
+@TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:mirrors';
 import 'dart:typed_data';

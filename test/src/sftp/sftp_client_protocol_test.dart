@@ -1,3 +1,6 @@
+@TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -787,6 +790,175 @@ void main() {
       final contents = await tempFile.readAsBytes();
       expect(contents, Uint8List.fromList('ABCDEFGHIJKL'.codeUnits));
 
+      await tempDir.delete(recursive: true);
+      harness.dispose();
+    });
+
+    test(
+        'downloadToRandomAccess falls back to EOF-driven reads for virtual '
+        'files that report stat size 0 but actually contain data', () async {
+      final harness = _SftpHarness();
+      await harness.nextOutgoingPacket();
+      harness.sendResponsePacket(SftpVersionPacket(3));
+      await harness.client.handshake;
+
+      final fileFuture = harness.client.open('/proc/virtual');
+      final open = SftpOpenPacket.decode(await harness.nextOutgoingPacket());
+      harness.sendResponsePacket(
+        SftpHandlePacket(open.requestId, Uint8List.fromList([1])),
+      );
+      final file = await fileFuture;
+
+      final tempDir =
+          await Directory.systemTemp.createTemp('sftp_ra_virtual_test');
+      final tempFile = File('${tempDir.path}/virtual.bin');
+      final raf = await tempFile.open(mode: FileMode.write);
+
+      // No explicit `length`, so downloadToRandomAccess must stat() first.
+      final downloadFuture = file.downloadToRandomAccess(raf);
+
+      final statPacket = await harness.nextOutgoingPacket();
+      final fstat = SftpFStatPacket.decode(statPacket);
+      harness.sendResponsePacket(
+        SftpAttrsPacket(fstat.requestId, SftpFileAttrs(size: 0)),
+      );
+
+      // A real read request must still be issued even though stat()
+      // reported size 0 - EOF is what actually terminates the download.
+      final readPacket = await harness.nextOutgoingPacket();
+      final read = SftpReadPacket.decode(readPacket);
+      harness.sendResponsePacket(
+        SftpDataPacket(read.requestId, Uint8List.fromList([1, 2, 3, 4])),
+      );
+
+      // The short reply triggers a follow-up read to fill out the original
+      // (sentinel-sized) request; respond to it with EOF.
+      final followUpPacket = await harness.nextOutgoingPacket();
+      final followUpRead = SftpReadPacket.decode(followUpPacket);
+      harness.sendResponsePacket(
+        SftpStatusPacket(
+          requestId: followUpRead.requestId,
+          code: SftpStatusCode.eof,
+          message: '',
+        ),
+      );
+
+      final bytesWritten = await downloadFuture;
+      expect(bytesWritten, 4);
+
+      await raf.close();
+      final contents = await tempFile.readAsBytes();
+      expect(contents, Uint8List.fromList([1, 2, 3, 4]));
+
+      await tempDir.delete(recursive: true);
+      harness.dispose();
+    });
+
+    test(
+        'downloadToRandomAccess on a genuinely empty file (stat size 0) '
+        'completes with zero bytes and no error', () async {
+      final harness = _SftpHarness();
+      await harness.nextOutgoingPacket();
+      harness.sendResponsePacket(SftpVersionPacket(3));
+      await harness.client.handshake;
+
+      final fileFuture = harness.client.open('/tmp/empty');
+      final open = SftpOpenPacket.decode(await harness.nextOutgoingPacket());
+      harness.sendResponsePacket(
+        SftpHandlePacket(open.requestId, Uint8List.fromList([1])),
+      );
+      final file = await fileFuture;
+
+      final tempDir =
+          await Directory.systemTemp.createTemp('sftp_ra_empty_test');
+      final tempFile = File('${tempDir.path}/empty.bin');
+      final raf = await tempFile.open(mode: FileMode.write);
+
+      final downloadFuture = file.downloadToRandomAccess(raf);
+
+      final statPacket = await harness.nextOutgoingPacket();
+      final fstat = SftpFStatPacket.decode(statPacket);
+      harness.sendResponsePacket(
+        SftpAttrsPacket(fstat.requestId, SftpFileAttrs(size: 0)),
+      );
+
+      // The very first read request comes back as EOF immediately, since
+      // the file is genuinely empty.
+      final readPacket = await harness.nextOutgoingPacket();
+      final read = SftpReadPacket.decode(readPacket);
+      harness.sendResponsePacket(
+        SftpStatusPacket(
+          requestId: read.requestId,
+          code: SftpStatusCode.eof,
+          message: '',
+        ),
+      );
+
+      final bytesWritten = await downloadFuture;
+      expect(bytesWritten, 0);
+
+      await raf.close();
+      final contents = await tempFile.readAsBytes();
+      expect(contents, isEmpty);
+
+      await tempDir.delete(recursive: true);
+      harness.dispose();
+    });
+
+    test(
+        'downloadToRandomAccess still raises on a genuine short read '
+        'against a known length', () async {
+      final harness = _SftpHarness();
+      await harness.nextOutgoingPacket();
+      harness.sendResponsePacket(SftpVersionPacket(3));
+      await harness.client.handshake;
+
+      final fileFuture = harness.client.open('/tmp/short');
+      final open = SftpOpenPacket.decode(await harness.nextOutgoingPacket());
+      harness.sendResponsePacket(
+        SftpHandlePacket(open.requestId, Uint8List.fromList([1])),
+      );
+      final file = await fileFuture;
+
+      final tempDir =
+          await Directory.systemTemp.createTemp('sftp_ra_short_test');
+      final tempFile = File('${tempDir.path}/short.bin');
+      final raf = await tempFile.open(mode: FileMode.write);
+
+      // An explicit, known length of 10 bytes.
+      final downloadFuture = file.downloadToRandomAccess(raf, length: 10);
+
+      final read = SftpReadPacket.decode(await harness.nextOutgoingPacket());
+      expect(read.length, 10);
+      harness.sendResponsePacket(
+        SftpDataPacket(read.requestId, Uint8List.fromList([1, 2, 3, 4])),
+      );
+
+      // The short 4-byte reply triggers a follow-up read for the remaining
+      // 6 bytes; the server unexpectedly reports EOF instead of supplying
+      // them. Since the target length was known up front, this must still
+      // be treated as a truncated download, not a virtual/unbounded file.
+      final followUp =
+          SftpReadPacket.decode(await harness.nextOutgoingPacket());
+      expect(followUp.offset, 4);
+      harness.sendResponsePacket(
+        SftpStatusPacket(
+          requestId: followUp.requestId,
+          code: SftpStatusCode.eof,
+          message: '',
+        ),
+      );
+
+      await expectLater(
+        downloadFuture,
+        throwsA(isA<SftpError>().having(
+          (e) => e.message,
+          'message',
+          contains('Incomplete download'),
+        )),
+      );
+
+      await raf.close();
       await tempDir.delete(recursive: true);
       harness.dispose();
     });

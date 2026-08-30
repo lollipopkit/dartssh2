@@ -78,7 +78,8 @@ class SSHMessageReader {
 
   int readUint64() {
     _require(8);
-    final value = _byteData.getUint64(_offset);
+    // Two 32-bit reads rather than getUint64: see utils/int.dart.
+    final value = _byteData.getUint64Split(_offset);
     _offset += 8;
     return value;
   }
