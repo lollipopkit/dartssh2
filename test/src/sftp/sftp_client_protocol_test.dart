@@ -54,6 +54,27 @@ void main() {
       harness.dispose();
     });
 
+    test('and closes the channel it can no longer read', () async {
+      // `close()` returns early once the failure has completed `_done`, so if
+      // this did not happen here nothing would ever close it — the far side's
+      // process outlives the client that gave up on it.
+      final harness = _SftpHarness();
+      await harness.nextOutgoingPacket();
+      harness.sendRawData(ascii.encode('Now entering the shell\r\n'));
+      await harness.client.handshake.then((_) {}, onError: (Object _) {});
+      await pumpEventQueue();
+
+      // The half of closing that is this side's. `done` is not the assertion:
+      // a channel stays open until the peer closes it back, and this harness
+      // has no peer to do that.
+      expect(
+        harness.outgoingMessages.whereType<SSH_Message_Channel_EOF>(),
+        isNotEmpty,
+      );
+
+      harness.dispose();
+    });
+
     test('and reports it nowhere else', () async {
       // The same failure is completed onto a private `_done` that nothing can
       // await, so it used to reach the zone as an uncaught error — a crash
@@ -964,7 +985,11 @@ class _SftpHarness {
   SftpPacket? Function(Uint8List payload)? _outboundResponder;
   var _disposed = false;
 
+  /// Everything sent, for a test about a message that is not channel data.
+  final outgoingMessages = <SSHMessage>[];
+
   void _handleOutboundMessage(SSHMessage message) {
+    outgoingMessages.add(message);
     if (message is! SSH_Message_Channel_Data) return;
     final reader = SSHMessageReader(message.data);
     final length = reader.readUint32();

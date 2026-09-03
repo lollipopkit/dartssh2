@@ -304,6 +304,15 @@ class SftpClient {
     if (!_done.isCompleted) {
       _done.completeError(error, stackTrace);
     }
+    // The channel goes with it. It is useless after a fatal protocol error,
+    // and `close()` returns early once `_done` is completed — so without this
+    // nothing ever closes it, not even the owner disposing this client. What
+    // is left running on the far side is an `sftp-server`, or whatever
+    // answered in its place, for the life of the SSH connection.
+    //
+    // Idempotent on the channel's side, which is what makes it safe here:
+    // `_closeError` can be reached twice for one failure.
+    unawaited(_channel.close());
   }
 
   void _startHandshake() {
