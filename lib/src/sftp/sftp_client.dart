@@ -540,10 +540,10 @@ class SftpClient {
             SftpError(
               _handshake.isCompleted
                   ? 'Packet too large: length=$length '
-                        'bufferLen=${_buffer.length}'
+                      'bufferLen=${_buffer.length}'
                   : 'Not an SFTP stream: the channel opened but the first '
-                        'bytes on it are not an SFTP packet. Something on the '
-                        'remote side is writing to it.',
+                      'bytes on it are not an SFTP packet. Something on the '
+                      'remote side is writing to it.',
             ),
           );
           return;
