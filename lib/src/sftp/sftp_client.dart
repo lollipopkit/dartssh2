@@ -36,6 +36,16 @@ class SftpClient {
   final SSHPrintHandler? printTrace;
 
   SftpClient(this._channel, {this.printDebug, this.printTrace}) {
+    // Nothing can await `_done`: it is private and has no accessor, so an
+    // error completed onto it is unhandled by construction and goes to the
+    // zone. That is how a server answering the sftp subsystem with plain text
+    // became an uncaught error in the host application rather than a failed
+    // listing — the failure is delivered to the handshake and to every pending
+    // request as well, which is where somebody is actually waiting.
+    //
+    // Marks it handled without hiding it: a later listener still receives the
+    // error, so adding a public `done` would work.
+    _done.future.ignore();
     _startHandshake();
     _channel.stream.listen(
       _handleData,
@@ -509,10 +519,22 @@ class SftpClient {
       try {
         final length = _buffer.byteData.getUint32(0);
         if (length > _kMaxPacketSize) {
+          // Before the handshake this is not a large packet, it is not SFTP at
+          // all. Text read as a length is always enormous — the first byte of
+          // anything printable is at least 0x20, so the smallest such "length"
+          // is 512 MiB — and the number it prints says nothing to anybody.
+          //
+          // It happens when the channel opens but something on the far side
+          // writes to it: a login script printing to stdout, or a `Subsystem
+          // sftp` that goes through a shell.
           _closeError(
             SftpError(
-              'Packet too large: length=$length '
-              'bufferLen=${_buffer.length}',
+              _handshake.isCompleted
+                  ? 'Packet too large: length=$length '
+                        'bufferLen=${_buffer.length}'
+                  : 'Not an SFTP stream: the channel opened but the first '
+                        'bytes on it are not an SFTP packet. Something on the '
+                        'remote side is writing to it.',
             ),
           );
           return;

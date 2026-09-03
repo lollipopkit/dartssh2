@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -28,6 +29,47 @@ void main() {
       expect(handshake.extensions['fstatvfs@openssh.com'], '2');
 
       harness.dispose();
+    });
+
+    test('a channel that answers with text fails the handshake', () async {
+      final harness = _SftpHarness();
+      await harness.nextOutgoingPacket();
+
+      // What a login script printing to stdout puts on the channel. Read as a
+      // packet length it is 0x4E6F7720 — over a gigabyte, and the number is
+      // what the error used to be about.
+      harness.sendRawData(ascii.encode('Now entering the shell\r\n'));
+
+      await expectLater(
+        harness.client.handshake,
+        throwsA(
+          isA<SftpError>().having(
+            (e) => e.message,
+            'message',
+            contains('Not an SFTP stream'),
+          ),
+        ),
+      );
+
+      harness.dispose();
+    });
+
+    test('and reports it nowhere else', () async {
+      // The same failure is completed onto a private `_done` that nothing can
+      // await, so it used to reach the zone as an uncaught error — a crash
+      // report in the host application for a listing that simply failed.
+      final uncaught = <Object>[];
+      await runZonedGuarded(() async {
+        final harness = _SftpHarness();
+        await harness.nextOutgoingPacket();
+        harness.sendRawData(ascii.encode('Now entering the shell\r\n'));
+        await harness.client.handshake.then((_) {}, onError: (Object _) {});
+        harness.dispose();
+        // Unhandled errors are reported a turn after the completion.
+        await Future<void>.delayed(Duration.zero);
+      }, (error, _) => uncaught.add(error));
+
+      expect(uncaught, isEmpty);
     });
 
     test('stat uses lstat when followLink is false', () async {
@@ -954,10 +996,16 @@ class _SftpHarness {
     writer.writeUint32(payload.length);
     writer.writeBytes(payload);
 
+    sendRawData(writer.takeBytes());
+  }
+
+  /// Whatever the far side put on the channel, framed by nobody — which is the
+  /// case worth testing, a server that answers the subsystem with text.
+  void sendRawData(List<int> bytes) {
     _controller.handleMessage(
       SSH_Message_Channel_Data(
         recipientChannel: _controller.localId,
-        data: writer.takeBytes(),
+        data: Uint8List.fromList(bytes),
       ),
     );
   }
