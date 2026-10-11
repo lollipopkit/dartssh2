@@ -1,6 +1,6 @@
 export 'src/ssh_algorithm.dart' show SSHAlgorithms;
 export 'src/ssh_agent.dart';
-export 'src/ssh_client.dart';
+export 'src/ssh_client.dart' hide SSHClientTesting;
 export 'src/ssh_errors.dart';
 export 'src/ssh_forward.dart';
 export 'src/ssh_key_pair.dart';
@@ -10,7 +10,7 @@ export 'src/ssh_hostkey.dart';
 export 'src/ssh_pem.dart';
 export 'src/ssh_session.dart';
 export 'src/ssh_signal.dart';
-export 'src/ssh_transport.dart';
+export 'src/ssh_transport.dart' hide SSHTransportTesting;
 export 'src/ssh_userauth.dart';
 
 export 'src/socket/ssh_socket.dart';

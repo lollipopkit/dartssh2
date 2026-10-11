@@ -7,21 +7,13 @@
 // `SSHInternalError`. This pins both paths on the same error.
 
 import 'dart:async';
-import 'dart:mirrors';
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
+import 'package:dartssh2/src/ssh_transport.dart';
 import 'package:test/test.dart';
 
 void main() {
-  final transportLibrary = reflectClass(SSHTransport).owner as LibraryMirror;
-  void setPrivate(SSHTransport transport, String field, Object? value) {
-    reflect(transport).setField(
-      MirrorSystem.getSymbol(field, transportLibrary),
-      value,
-    );
-  }
-
   /// A receiver keyed for `aes256-ctr` with a plain (non-ETM) HMAC.
   (SSHTransport, _FeedSSHSocket) receiver(Uint8List key, Uint8List iv) {
     final socket = _FeedSSHSocket();
@@ -32,19 +24,14 @@ void main() {
         mac: [SSHMacType.hmacSha256],
       ),
     );
-    setPrivate(transport, '_remoteVersion', 'SSH-2.0-test');
-    setPrivate(transport, '_serverCipherType', SSHCipherType.aes256ctr);
-    setPrivate(transport, '_serverMacType', SSHMacType.hmacSha256);
-    setPrivate(
-      transport,
-      '_decryptCipher',
-      SSHCipherType.aes256ctr.createCipher(key, iv, forEncryption: false),
-    );
-    setPrivate(
-      transport,
-      '_remoteMac',
-      SSHMacType.hmacSha256.createMac(Uint8List(SSHMacType.hmacSha256.keySize)),
-    );
+    transport
+      ..receivedVersion('SSH-2.0-test')
+      ..serverCipherType = SSHCipherType.aes256ctr
+      ..serverMacType = SSHMacType.hmacSha256
+      ..decryptCipher =
+          SSHCipherType.aes256ctr.createCipher(key, iv, forEncryption: false)
+      ..remoteMac = SSHMacType.hmacSha256
+          .createMac(Uint8List(SSHMacType.hmacSha256.keySize));
     return (transport, socket);
   }
 

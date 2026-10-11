@@ -95,7 +95,7 @@ class SSHCipherType extends SSHAlgorithm {
   const SSHCipherType._({
     required this.name,
     required this.keySize,
-    this.cipherFactory,
+    required this.cipherFactory,
     this.isAead = false,
     this.aeadTagSize = 0,
     this.ivSize = 16,
@@ -115,7 +115,7 @@ class SSHCipherType extends SSHAlgorithm {
 
   final int blockSize;
 
-  final dynamic Function()? cipherFactory;
+  final dynamic Function() cipherFactory;
 
   BlockCipher createCipher(
     Uint8List key,
@@ -126,11 +126,6 @@ class SSHCipherType extends SSHAlgorithm {
       throw UnsupportedError(
         'AEAD ciphers are packet-level and do not expose BlockCipher',
       );
-    }
-
-    final factory = cipherFactory;
-    if (factory == null) {
-      throw StateError('No block cipher factory configured for $name');
     }
 
     if (key.length != keySize) {
@@ -151,7 +146,7 @@ class SSHCipherType extends SSHAlgorithm {
     );
     if (native != null) return native;
 
-    final cipher = factory();
+    final cipher = cipherFactory();
     cipher.init(forEncryption, ParametersWithIV(KeyParameter(key), iv));
     return cipher;
   }
@@ -178,12 +173,7 @@ class SSHCipherType extends SSHAlgorithm {
       );
     }
 
-    final factory = cipherFactory;
-    if (factory == null) {
-      throw StateError('No AEAD cipher factory configured for $name');
-    }
-
-    final cipher = factory();
+    final cipher = cipherFactory();
     final params = AEADParameters(
       KeyParameter(key),
       aeadTagSize * 8,

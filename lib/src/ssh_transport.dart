@@ -20,9 +20,12 @@ import 'package:dartssh2/src/utils/int.dart';
 import 'package:dartssh2/src/hostkey/hostkey_ed25519.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:dartssh2/src/utils/list.dart';
+import 'package:meta/meta.dart';
 import 'package:pointycastle/export.dart';
 
 import '../dartssh2.dart';
+
+part 'ssh_transport_testing.dart';
 
 typedef SSHPrintHandler = void Function(String?);
 

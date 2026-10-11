@@ -22,6 +22,8 @@ import 'package:dartssh2/src/socket/ssh_socket.dart';
 import 'package:dartssh2/src/utils/async_queue.dart';
 import 'package:meta/meta.dart';
 
+part 'ssh_client_testing.dart';
+
 /// Type definition for the host keys handler.
 typedef SSHHostKeysHandler = void Function(List<SSHHostKey> hostKeys);
 
