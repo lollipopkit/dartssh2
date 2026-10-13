@@ -197,6 +197,12 @@ class SSHClient {
   /// method. Set this to null to disable automatic keep-alive messages.
   final Duration? keepAliveInterval;
 
+  /// Keep-alive messages left unanswered before the connection is closed with
+  /// an [SSHKeepAliveError], like OpenSSH's `ServerAliveCountMax`. A
+  /// connection the network dropped silently (a NAT entry that expired while
+  /// the app was suspended, say) is otherwise never noticed.
+  final int keepAliveMaxMissed;
+
   /// Key pairs to use for hostbased authentication.
   final List<SSHKeyPair>? hostbasedIdentities;
 
@@ -255,6 +261,7 @@ class SSHClient {
     this.onUserauthBanner,
     this.onAuthenticated,
     this.keepAliveInterval = const Duration(seconds: 10),
+    this.keepAliveMaxMissed = 3,
     this.handshakeTimeout,
     this.authTimeout,
 
@@ -360,7 +367,16 @@ class SSHClient {
   final _remoteForwards = <SSHRemoteForward>{};
 
   late final _keepAlive = keepAliveInterval != null
-      ? SSHKeepAlive(ping: ping, interval: keepAliveInterval!)
+      ? SSHKeepAlive(
+          ping: ping,
+          interval: keepAliveInterval!,
+          maxMissed: keepAliveMaxMissed,
+          onDead: () => _transport.closeWithError(
+            SSHKeepAliveError(
+              'No reply to $keepAliveMaxMissed keep-alive messages',
+            ),
+          ),
+        )
       : null;
 
   SSHAuthMethod? _currentAuthMethod;
