@@ -79,6 +79,15 @@ class SSHStateError with SSHMessageError implements SSHError {
   SSHStateError(this.message);
 }
 
+/// The server stopped answering keep-alive messages: the connection is
+/// assumed dead and closed.
+class SSHKeepAliveError with SSHMessageError implements SSHError {
+  @override
+  final String message;
+
+  SSHKeepAliveError(this.message);
+}
+
 /// Errors that happen when the library fails to decode a key.
 class SSHKeyDecodeError with SSHMessageError implements SSHError {
   @override
