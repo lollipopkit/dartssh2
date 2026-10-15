@@ -888,6 +888,21 @@ class SSHClient {
     _transport.sendPacket(message.encode());
   }
 
+  /// What a channel sends through: [_sendMessage], except that once the
+  /// transport has closed the message is dropped instead of throwing.
+  ///
+  /// A channel outlives its transport by a moment — its upload loop can wake
+  /// with data before the close reaches it, and destroying it sends EOF —
+  /// and in neither is there a caller to take the error: the upload loop runs
+  /// unawaited, so it went to the zone (SERVERBOX-M), and in `destroy()` it
+  /// left that channel undone and the rest of [_closeChannels] skipped. With
+  /// the transport gone nothing can reach the far end anyway, and the channel
+  /// reports its end through `done`.
+  void _sendChannelMessage(SSHMessage message) {
+    if (_transport.isClosed) return;
+    _sendMessage(message);
+  }
+
   void _catch(FutureOr<dynamic> Function() fn) {
     Future.sync(fn).catchError((e, st) {
       _transport.closeWithError(SSHInternalError(e), st);
@@ -1704,7 +1719,7 @@ class SSHClient {
       remoteId: remoteChannelId,
       remoteInitialWindowSize: remoteInitialWindowSize,
       remoteMaximumPacketSize: remoteMaximumPacketSize,
-      sendMessage: _sendMessage,
+      sendMessage: _sendChannelMessage,
       onFlush: flush,
       printDebug: printDebug,
     );
