@@ -13,11 +13,11 @@ void main() {
   late SSHClient client;
 
   SSHChannelController accept(int id) => client.acceptChannelForTesting(
-    localChannelId: id,
-    remoteChannelId: id + 100,
-    remoteInitialWindowSize: 1024,
-    remoteMaximumPacketSize: 1024,
-  );
+        localChannelId: id,
+        remoteChannelId: id + 100,
+        remoteInitialWindowSize: 1024,
+        remoteMaximumPacketSize: 1024,
+      );
 
   setUp(() {
     socket = _DroppableSocket();
@@ -30,7 +30,8 @@ void main() {
     await socket.drop();
 
     for (final c in channels) {
-      await expectLater(c.channel.done.timeout(const Duration(seconds: 1)), completes);
+      await expectLater(
+          c.channel.done.timeout(const Duration(seconds: 1)), completes);
     }
   });
 
