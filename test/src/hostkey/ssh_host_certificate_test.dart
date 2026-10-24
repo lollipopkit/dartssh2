@@ -24,84 +24,45 @@ void main() {
       ('ecdsa_by_rsa-cert.pub', 'host_ecdsa.pub'),
       ('rsa_by_ecdsa-cert.pub', 'host_rsa.pub'),
     ]) {
-      expect(SSHHostCertificate.decode(_blob(cert)).publicKey, _blob(key),
-          reason: cert);
+      final certificate = SSHHostCertificate.decode(_blob(cert));
+      expect(certificate.publicKey, _blob(key), reason: cert);
+      expect(certificate.type, endsWith('-cert-v01@openssh.com'));
     }
   });
 
-  test('what a host certificate says is read', () {
-    final cert =
-        SSHHostCertificate.decode(_blob('ed25519_by_ed25519-cert.pub'));
-    expect(cert.type, 'ssh-ed25519-cert-v01@openssh.com');
-    expect(cert.certType, SSHHostCertificate.hostType);
-    expect(cert.keyId, 'ed25519-by-ed25519');
-    expect(cert.principals, ['host.example']);
-    expect(cert.criticalOptions, isEmpty);
-    // `forever` is all ones on the wire.
-    expect(cert.validBefore, isNegative);
-  });
-
-  test('signed by an Ed25519, RSA or ECDSA authority, it verifies', () {
+  // No authority is trusted, so none of this says anything; OpenSSH falls back
+  // to the plain key in the same case and does not look at it either.
+  test('dates, options, type and signer are not grounds to refuse', () {
     for (final name in [
-      'ed25519_by_ed25519-cert.pub',
-      'ecdsa_by_rsa-cert.pub',
-      'rsa_by_ecdsa-cert.pub',
+      'expired-cert.pub',
+      'user-cert.pub',
+      'critical-cert.pub',
+      'sha1_ca-cert.pub',
     ]) {
-      expect(() => SSHHostCertificate.decode(_blob(name)).verify(),
-          returnsNormally,
+      expect(SSHHostCertificate.decode(_blob(name)).publicKey,
+          _blob('host_ed25519.pub'),
           reason: name);
     }
   });
 
-  test('out of date, it is refused, and says so', () {
-    final cert = SSHHostCertificate.decode(_blob('expired-cert.pub'));
-    expect(() => cert.verify(), _refused('expired'));
-    expect(
-        () => cert.verify(now: DateTime.utc(2019)), _refused('not yet valid'));
-    expect(
-        () => cert.verify(now: DateTime.utc(2020, 1, 1, 12)), returnsNormally);
-  });
-
-  test('a user certificate is not a host certificate', () {
-    final cert = SSHHostCertificate.decode(_blob('user-cert.pub'));
-    expect(() => cert.verify(), _refused('non-host certificate'));
-  });
-
-  test('a critical option it does not know refuses the certificate', () {
-    final cert = SSHHostCertificate.decode(_blob('critical-cert.pub'));
-    expect(cert.criticalOptions, ['test@example.com']);
-    expect(() => cert.verify(), _refused('critical options'));
-  });
-
-  test('an authority signing with SHA-1 is refused, as OpenSSH refuses it', () {
-    final cert = SSHHostCertificate.decode(_blob('sha1_ca-cert.pub'));
-    expect(() => cert.verify(), _refused('refused algorithm ssh-rsa'));
-  });
-
-  test('a certificate altered after signing does not verify', () {
-    final data = _blob('ed25519_by_ed25519-cert.pub');
-    final principal = utf8.encode('host.example');
-    final at = _indexOf(data, principal);
-    data[at] ^= 1; // `iost.example`: still well formed, no longer signed
-    final cert = SSHHostCertificate.decode(data);
-    expect(cert.principals.single, isNot('host.example'));
-    expect(() => cert.verify(), _refused('signature is invalid'));
+  test('an ECDSA certificate whose curve is not its type is refused', () {
+    final data = _blob('ecdsa_by_rsa-cert.pub');
+    final curve = utf8.encode('nistp384');
+    // The curve string, after the type that also names it.
+    final at = _indexOf(data, curve, from: _indexOf(data, curve) + 1);
+    data.setRange(at, at + curve.length, utf8.encode('nistp521'));
+    expect(() => SSHHostCertificate.decode(data),
+        _refused('curve nistp521 does not match'));
   });
 
   test('a plain host key is not a certificate', () {
-    expect(
-        SSHHostCertificate.isCertificate(_blob('host_ed25519.pub')), isFalse);
-    expect(
-      SSHHostCertificate.isCertificate(_blob('ed25519_by_ed25519-cert.pub')),
-      isTrue,
-    );
     expect(() => SSHHostCertificate.decode(_blob('host_ed25519.pub')),
         _refused('Not a host certificate'));
   });
 }
 
-int _indexOf(List<int> data, List<int> part) {
-  for (var i = 0; i + part.length <= data.length; i++) {
+int _indexOf(List<int> data, List<int> part, {int from = 0}) {
+  for (var i = from; i + part.length <= data.length; i++) {
     var match = true;
     for (var j = 0; j < part.length && match; j++) {
       match = data[i + j] == part[j];

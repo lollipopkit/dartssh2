@@ -35,6 +35,26 @@ void main() {
           'rsa-sha2-512-cert-v01@openssh.com');
     });
 
+    test('by default, each certificate is just before the key it certifies',
+        () {
+      final offered = const SSHAlgorithms().hostkey;
+      // Without the certificates, the keys and their order are as before, so
+      // a server with no certificate negotiates the key it always did.
+      expect(offered.where((t) => !t.isCertificate), [
+        SSHHostkeyType.ed25519,
+        SSHHostkeyType.ecdsa521,
+        SSHHostkeyType.ecdsa384,
+        SSHHostkeyType.ecdsa256,
+        SSHHostkeyType.rsaSha512,
+        SSHHostkeyType.rsaSha256,
+      ]);
+      for (var i = 0; i < offered.length; i++) {
+        if (offered[i].isCertificate) {
+          expect(offered[i + 1], same(offered[i].keyType));
+        }
+      }
+    });
+
     test('toString() returns correct format', () {
       expect(
           SSHHostkeyType.rsaSha1.toString(), equals('SSHHostkeyType(ssh-rsa)'));

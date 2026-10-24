@@ -96,16 +96,16 @@ void main() {
         algorithms.hostkey,
         equals([
           SSHHostkeyType.ed25519Cert,
-          SSHHostkeyType.ecdsa521Cert,
-          SSHHostkeyType.ecdsa384Cert,
-          SSHHostkeyType.ecdsa256Cert,
-          SSHHostkeyType.rsaSha512Cert,
-          SSHHostkeyType.rsaSha256Cert,
           SSHHostkeyType.ed25519,
+          SSHHostkeyType.ecdsa521Cert,
           SSHHostkeyType.ecdsa521,
+          SSHHostkeyType.ecdsa384Cert,
           SSHHostkeyType.ecdsa384,
+          SSHHostkeyType.ecdsa256Cert,
           SSHHostkeyType.ecdsa256,
+          SSHHostkeyType.rsaSha512Cert,
           SSHHostkeyType.rsaSha512,
+          SSHHostkeyType.rsaSha256Cert,
           SSHHostkeyType.rsaSha256,
         ]));
 

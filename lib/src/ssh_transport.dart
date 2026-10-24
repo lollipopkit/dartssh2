@@ -176,6 +176,10 @@ class SSHTransport {
   /// when the transport is acting as a server.
   var _hostkeyVerified = false;
 
+  /// The key [_hostkeyVerified] was decided on — a certificate's certified
+  /// key — so a re-key cannot bring a different one in without being asked.
+  Uint8List? _verifiedHostPublicKey;
+
   /// Whether the transport ready callback has been dispatched.
   var _readyDispatched = false;
 
@@ -1671,8 +1675,20 @@ class SSHTransport {
       } catch (e) {
         throw SSHHostkeyError('Malformed host certificate: $e');
       }
-      if (!disableHostkeyVerification) certificate.verify();
       hostPublicKey = certificate.publicKey;
+      final keyType = SSHHostKey.getType(hostPublicKey);
+      final expected = switch (hostkeyType.keyType) {
+        SSHHostkeyType.rsaSha1 ||
+        SSHHostkeyType.rsaSha256 ||
+        SSHHostkeyType.rsaSha512 =>
+          SSHRsaPublicKey.type,
+        final plain => plain.name,
+      };
+      if (keyType != expected) {
+        throw SSHHostkeyError(
+          'Host certificate ${certificate.type} does not match $hostkeyType',
+        );
+      }
     }
 
     if (!disableHostkeyVerification) {
@@ -1695,6 +1711,12 @@ class SSHTransport {
     _sharedSecret = sharedSecret;
 
     if (_hostkeyVerified) {
+      // A re-key: the host is the one already verified, or nothing is.
+      final verifiedKey = _verifiedHostPublicKey;
+      if (!disableHostkeyVerification &&
+          (verifiedKey == null || !_bytesEqual(verifiedKey, hostPublicKey))) {
+        throw SSHHostkeyError('Host key changed during re-key');
+      }
       _sendNewKeys();
       _applyLocalKeys();
       if (!_readyDispatched) {
@@ -1721,12 +1743,21 @@ class SSHTransport {
     }
 
     _hostkeyVerified = true;
+    _verifiedHostPublicKey = hostPublicKey;
     _sendNewKeys();
     _applyLocalKeys();
     if (!_readyDispatched) {
       _readyDispatched = true;
       onReady?.call();
     }
+  }
+
+  static bool _bytesEqual(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Processes the Group Exchange Reply (GEX Group) message containing Diffie-Hellman params.
