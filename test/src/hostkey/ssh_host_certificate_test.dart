@@ -30,9 +30,9 @@ void main() {
     }
   });
 
-  // No authority is trusted, so none of this says anything; OpenSSH falls back
+  // With no authority trusted none of this says anything; OpenSSH falls back
   // to the plain key in the same case and does not look at it either.
-  test('dates, options, type and signer are not grounds to refuse', () {
+  test('decoding alone refuses nothing the key is fine for', () {
     for (final name in [
       'expired-cert.pub',
       'user-cert.pub',
@@ -43,6 +43,94 @@ void main() {
           _blob('host_ed25519.pub'),
           reason: name);
     }
+  });
+
+  group('verified for a trusted authority', () {
+    const host = ['host.example'];
+
+    test('signed by an Ed25519, RSA or ECDSA authority, it verifies', () {
+      for (final name in [
+        'ed25519_by_ed25519-cert.pub',
+        'ecdsa_by_rsa-cert.pub',
+        'rsa_by_ecdsa-cert.pub',
+      ]) {
+        expect(
+            () =>
+                SSHHostCertificate.decode(_blob(name)).verify(principals: host),
+            returnsNormally,
+            reason: name);
+      }
+    });
+
+    test('what it says is read, "forever" included', () {
+      final cert =
+          SSHHostCertificate.decode(_blob('ed25519_by_ed25519-cert.pub'));
+      expect(cert.certType, SSHHostCertificate.hostType);
+      expect(cert.keyId, 'ed25519-by-ed25519');
+      expect(cert.principals, host);
+      expect(cert.criticalOptions, isEmpty);
+      expect(cert.validBefore, (BigInt.one << 64) - BigInt.one);
+    });
+
+    test('out of date, it is refused, and says so', () {
+      final cert = SSHHostCertificate.decode(_blob('expired-cert.pub'));
+      expect(() => cert.verify(principals: host), _refused('expired'));
+      expect(() => cert.verify(principals: host, now: DateTime.utc(2019)),
+          _refused('not yet valid'));
+      expect(
+          () =>
+              cert.verify(principals: host, now: DateTime.utc(2020, 1, 1, 12)),
+          returnsNormally);
+    });
+
+    test('for a name it does not list, it is refused', () {
+      final cert =
+          SSHHostCertificate.decode(_blob('ed25519_by_ed25519-cert.pub'));
+      expect(() => cert.verify(principals: ['other.example']),
+          _refused('not valid for other.example'));
+      expect(() => cert.verify(principals: ['other.example', 'host.example']),
+          returnsNormally);
+    });
+
+    test('a user certificate is not a host certificate', () {
+      final cert = SSHHostCertificate.decode(_blob('user-cert.pub'));
+      expect(() => cert.verify(principals: host),
+          _refused('non-host certificate'));
+    });
+
+    test('a critical option it does not know refuses it', () {
+      final cert = SSHHostCertificate.decode(_blob('critical-cert.pub'));
+      expect(cert.criticalOptions, ['test@example.com']);
+      expect(() => cert.verify(principals: host), _refused('critical options'));
+    });
+
+    test('an authority signing with SHA-1 is refused, as OpenSSH refuses it',
+        () {
+      final cert = SSHHostCertificate.decode(_blob('sha1_ca-cert.pub'));
+      expect(() => cert.verify(principals: host),
+          _refused('refused algorithm ssh-rsa'));
+    });
+
+    test('altered after signing, it does not verify', () {
+      final data = _blob('ed25519_by_ed25519-cert.pub');
+      final at = _indexOf(data, utf8.encode('ed25519-by-ed25519'));
+      data[at] ^= 1; // the key id: still well formed, no longer signed
+      expect(() => SSHHostCertificate.decode(data).verify(principals: host),
+          _refused('signature is invalid'));
+    });
+  });
+
+  test('a tail cut short refuses nothing until it is read', () {
+    final full = _blob('ed25519_by_ed25519-cert.pub');
+    // Up to the key id: the certified key is whole, the rest is not.
+    final cut = Uint8List.sublistView(
+      full,
+      0,
+      _indexOf(full, utf8.encode('ed25519-by-ed25519')),
+    );
+    final cert = SSHHostCertificate.decode(cut);
+    expect(cert.publicKey, _blob('host_ed25519.pub'));
+    expect(() => cert.principals, _refused('Malformed host certificate'));
   });
 
   test('an ECDSA certificate whose curve is not its type is refused', () {
