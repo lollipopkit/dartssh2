@@ -101,12 +101,23 @@ class SSHAlgorithms {
       SSHKexType.dh14Sha256,
       SSHKexType.dhGexSha256,
     ],
+    // Each certificate just before the key it certifies. The certified key
+    // is what is verified and pinned, so a server negotiates the same key it
+    // did before it had a certificate — all certificates first would move a
+    // host with a certificate for its RSA key only off its Ed25519 key, and
+    // ask about a key it was never pinned on.
     this.hostkey = const [
+      SSHHostkeyType.ed25519Cert,
       SSHHostkeyType.ed25519,
+      SSHHostkeyType.ecdsa521Cert,
       SSHHostkeyType.ecdsa521,
+      SSHHostkeyType.ecdsa384Cert,
       SSHHostkeyType.ecdsa384,
+      SSHHostkeyType.ecdsa256Cert,
       SSHHostkeyType.ecdsa256,
+      SSHHostkeyType.rsaSha512Cert,
       SSHHostkeyType.rsaSha512,
+      SSHHostkeyType.rsaSha256Cert,
       SSHHostkeyType.rsaSha256,
     ],
 

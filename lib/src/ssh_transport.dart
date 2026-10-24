@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' show Random, max;
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/hostkey/hostkey_cert.dart';
 import 'package:dartssh2/src/hostkey/hostkey_ecdsa.dart';
 import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
 import 'package:dartssh2/src/kex/kex_dh.dart';
@@ -174,6 +175,10 @@ class SSHTransport {
   /// Whether the hostkey of the server has been verified. This is always false
   /// when the transport is acting as a server.
   var _hostkeyVerified = false;
+
+  /// The key [_hostkeyVerified] was decided on — a certificate's certified
+  /// key — so a re-key cannot bring a different one in without being asked.
+  Uint8List? _verifiedHostPublicKey;
 
   /// Whether the transport ready callback has been dispatched.
   var _readyDispatched = false;
@@ -1313,11 +1318,12 @@ class SSHTransport {
   }
 
   bool _verifyHostkey({
+    required SSHHostkeyType? type,
     required Uint8List keyBytes,
     required Uint8List signatureBytes,
     required Uint8List exchangeHash,
   }) {
-    switch (_hostkeyType) {
+    switch (type) {
       case SSHHostkeyType.ed25519:
         final publicKey = SSHEd25519PublicKey.decode(keyBytes);
         final signature = SSHEd25519Signature.decode(signatureBytes);
@@ -1337,7 +1343,7 @@ class SSHTransport {
       case null:
         throw StateError('No hostkey type negotiated');
       default:
-        throw UnimplementedError('Unsupported hostkey type: $_hostkeyType');
+        throw UnimplementedError('Unsupported hostkey type: $type');
     }
   }
 
@@ -1654,9 +1660,41 @@ class SSHTransport {
       sharedSecret: sharedSecret,
     );
 
+    // A certificate is the host key the exchange hash covers; the key inside
+    // it signs the exchange, and is the one the user is asked to trust — so a
+    // pin taken on the plain key holds when the server starts offering a
+    // certificate for it, and the fingerprint is the one OpenSSH prints.
+    final hostkeyType = _hostkeyType!;
+    var hostPublicKey = hostkey;
+    if (hostkeyType.isCertificate) {
+      final SSHHostCertificate certificate;
+      try {
+        certificate = SSHHostCertificate.decode(hostkey);
+      } on SSHHostkeyError {
+        rethrow;
+      } catch (e) {
+        throw SSHHostkeyError('Malformed host certificate: $e');
+      }
+      hostPublicKey = certificate.publicKey;
+      final keyType = SSHHostKey.getType(hostPublicKey);
+      final expected = switch (hostkeyType.keyType) {
+        SSHHostkeyType.rsaSha1 ||
+        SSHHostkeyType.rsaSha256 ||
+        SSHHostkeyType.rsaSha512 =>
+          SSHRsaPublicKey.type,
+        final plain => plain.name,
+      };
+      if (keyType != expected) {
+        throw SSHHostkeyError(
+          'Host certificate ${certificate.type} does not match $hostkeyType',
+        );
+      }
+    }
+
     if (!disableHostkeyVerification) {
       final verified = _verifyHostkey(
-        keyBytes: hostkey,
+        type: hostkeyType.keyType,
+        keyBytes: hostPublicKey,
         signatureBytes: hostSignature,
         exchangeHash: exchangeHash,
       );
@@ -1673,6 +1711,12 @@ class SSHTransport {
     _sharedSecret = sharedSecret;
 
     if (_hostkeyVerified) {
+      // A re-key: the host is the one already verified, or nothing is.
+      final verifiedKey = _verifiedHostPublicKey;
+      if (!disableHostkeyVerification &&
+          (verifiedKey == null || !_bytesEqual(verifiedKey, hostPublicKey))) {
+        throw SSHHostkeyError('Host key changed during re-key');
+      }
       _sendNewKeys();
       _applyLocalKeys();
       if (!_readyDispatched) {
@@ -1682,7 +1726,7 @@ class SSHTransport {
       return;
     }
 
-    final fingerprint = _hostkeyFingerprint(hostkey);
+    final fingerprint = _hostkeyFingerprint(hostPublicKey);
 
     final handler = onVerifyHostKey;
     if (handler == null) {
@@ -1692,19 +1736,28 @@ class SSHTransport {
       return;
     }
 
-    final verified = await handler(_hostkeyType!.name, fingerprint);
+    final verified = await handler(hostkeyType.keyType.name, fingerprint);
     if (!verified) {
       closeWithError(SSHHostkeyError('Hostkey verification failed by user'));
       return;
     }
 
     _hostkeyVerified = true;
+    _verifiedHostPublicKey = hostPublicKey;
     _sendNewKeys();
     _applyLocalKeys();
     if (!_readyDispatched) {
       _readyDispatched = true;
       onReady?.call();
     }
+  }
+
+  static bool _bytesEqual(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Processes the Group Exchange Reply (GEX Group) message containing Diffie-Hellman params.
