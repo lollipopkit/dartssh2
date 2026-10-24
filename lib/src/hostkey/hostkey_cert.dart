@@ -35,7 +35,12 @@ class SSHHostCertificateTrust {
 /// With no authority trusted for the host, only [publicKey] matters: OpenSSH
 /// says "No matching CA found. Retry with plain key" and checks nothing else,
 /// since anyone can sign a certificate. Signed by a trusted one, [verify]
-/// decides, and a certificate it refuses refuses the host.
+/// decides, and a certificate it refuses refuses the host — OpenSSH fails the
+/// connection there too.
+///
+/// Everything after the certified key is read only when asked for, so a
+/// certificate whose tail no authority will ever look at cannot turn a host
+/// away.
 class SSHHostCertificate {
   static const _suffix = '-cert-v01@openssh.com';
 
@@ -49,43 +54,12 @@ class SSHHostCertificate {
   /// `ecdsa-sha2-*`). Its fingerprint is the host's, as OpenSSH prints it.
   final Uint8List publicKey;
 
-  /// `SSH_CERT_TYPE_USER` (1) or `SSH_CERT_TYPE_HOST` (2).
-  final int certType;
+  final Uint8List _data;
 
-  final String keyId;
+  /// Where the fields after the certified key start in [_data].
+  final int _rest;
 
-  final List<String> principals;
-
-  /// Seconds since the epoch. Unsigned 64-bit on the wire, so [BigInt]: an
-  /// `int` wraps at 2^63, and "forever" is all ones.
-  final BigInt validAfter;
-  final BigInt validBefore;
-
-  /// Option names; a host certificate defines none.
-  final List<String> criticalOptions;
-
-  /// The authority's public key.
-  final Uint8List signatureKey;
-
-  final Uint8List signature;
-
-  /// Everything [signature] covers: the certificate up to and including
-  /// [signatureKey].
-  final Uint8List signed;
-
-  SSHHostCertificate._({
-    required this.type,
-    required this.publicKey,
-    required this.certType,
-    required this.keyId,
-    required this.principals,
-    required this.validAfter,
-    required this.validBefore,
-    required this.criticalOptions,
-    required this.signatureKey,
-    required this.signature,
-    required this.signed,
-  });
+  SSHHostCertificate._(this.type, this.publicKey, this._data, this._rest);
 
   factory SSHHostCertificate.decode(Uint8List data) {
     final reader = SSHMessageReader(data);
@@ -116,34 +90,41 @@ class SSHHostCertificate {
       default:
         throw SSHHostkeyError('Unsupported certificate type: $type');
     }
-
-    reader.readUint64(); // serial
-    final certType = reader.readUint32();
-    final keyId = reader.readUtf8(allowMalformed: true);
-    final principals = _strings(reader.readString());
-    final validAfter = _readUint64(reader);
-    final validBefore = _readUint64(reader);
-    final criticalOptions = _optionNames(reader.readString());
-    reader.readString(); // extensions
-    reader.readString(); // reserved
-    final signatureKey = reader.readString();
-    final signedLength = reader.offset;
-    final signature = reader.readString();
-
-    return SSHHostCertificate._(
-      type: type,
-      publicKey: key.takeBytes(),
-      certType: certType,
-      keyId: keyId,
-      principals: principals,
-      validAfter: validAfter,
-      validBefore: validBefore,
-      criticalOptions: criticalOptions,
-      signatureKey: signatureKey,
-      signature: signature,
-      signed: Uint8List.sublistView(data, 0, signedLength),
-    );
+    return SSHHostCertificate._(type, key.takeBytes(), data, reader.offset);
   }
+
+  late final _CertificateFields _fields = () {
+    try {
+      return _CertificateFields.read(_data, _rest);
+    } catch (e) {
+      throw SSHHostkeyError('Malformed host certificate: $e');
+    }
+  }();
+
+  /// `SSH_CERT_TYPE_USER` (1) or `SSH_CERT_TYPE_HOST` (2).
+  int get certType => _fields.certType;
+
+  String get keyId => _fields.keyId;
+
+  /// Host names, which may hold `*` and `?` wildcards; none is any host.
+  List<String> get principals => _fields.principals;
+
+  /// Seconds since the epoch. Unsigned 64-bit on the wire, so [BigInt]: an
+  /// `int` wraps at 2^63, and "forever" is all ones.
+  BigInt get validAfter => _fields.validAfter;
+  BigInt get validBefore => _fields.validBefore;
+
+  /// Option names; a host certificate defines none.
+  List<String> get criticalOptions => _fields.criticalOptions;
+
+  /// The authority's public key.
+  Uint8List get signatureKey => _fields.signatureKey;
+
+  Uint8List get signature => _fields.signature;
+
+  /// Everything [signature] covers: the certificate up to and including
+  /// [signatureKey].
+  Uint8List get signed => Uint8List.sublistView(_data, 0, _fields.signedLength);
 
   /// Throws [SSHHostkeyError] saying why a host reached as one of
   /// [principals] may not present this certificate at [now], for a caller
@@ -167,9 +148,10 @@ class SSHHostCertificate {
     if (seconds >= validBefore) {
       throw SSHHostkeyError('Host certificate has expired');
     }
-    // No principals is any host, as OpenSSH reads it for a host certificate.
+    // No principals is any host, and a principal may be a wildcard, as
+    // OpenSSH reads both for a host certificate.
     if (this.principals.isNotEmpty &&
-        !principals.any(this.principals.contains)) {
+        !principals.any((name) => this.principals.any((p) => _glob(p, name)))) {
       throw SSHHostkeyError(
         'Host certificate is not valid for ${principals.join(', ')}: '
         'it names ${this.principals.join(', ')}',
@@ -227,6 +209,58 @@ class SSHHostCertificate {
       return false;
     }
   }
+}
+
+/// The fields of a certificate after its certified key.
+class _CertificateFields {
+  final int certType;
+  final String keyId;
+  final List<String> principals;
+  final BigInt validAfter;
+  final BigInt validBefore;
+  final List<String> criticalOptions;
+  final Uint8List signatureKey;
+  final int signedLength;
+  final Uint8List signature;
+
+  _CertificateFields._({
+    required this.certType,
+    required this.keyId,
+    required this.principals,
+    required this.validAfter,
+    required this.validBefore,
+    required this.criticalOptions,
+    required this.signatureKey,
+    required this.signedLength,
+    required this.signature,
+  });
+
+  factory _CertificateFields.read(Uint8List data, int offset) {
+    final reader = SSHMessageReader(data)..skip(offset);
+    reader.readUint64(); // serial
+    final certType = reader.readUint32();
+    final keyId = reader.readUtf8(allowMalformed: true);
+    final principals = _strings(reader.readString());
+    final validAfter = _readUint64(reader);
+    final validBefore = _readUint64(reader);
+    final criticalOptions = _optionNames(reader.readString());
+    reader.readString(); // extensions
+    reader.readString(); // reserved
+    final signatureKey = reader.readString();
+    final signedLength = reader.offset;
+    final signature = reader.readString();
+    return _CertificateFields._(
+      certType: certType,
+      keyId: keyId,
+      principals: principals,
+      validAfter: validAfter,
+      validBefore: validBefore,
+      criticalOptions: criticalOptions,
+      signatureKey: signatureKey,
+      signedLength: signedLength,
+      signature: signature,
+    );
+  }
 
   static BigInt _readUint64(SSHMessageReader reader) {
     final high = reader.readUint32();
@@ -249,6 +283,29 @@ class SSHHostCertificate {
     }
     return names;
   }
+}
+
+/// OpenSSH's `match_pattern`: `*` is any run of characters, `?` any one.
+bool _glob(String pattern, String text) {
+  var p = 0, t = 0, star = -1, mark = 0;
+  while (t < text.length) {
+    if (p < pattern.length && (pattern[p] == '?' || pattern[p] == text[t])) {
+      p++;
+      t++;
+    } else if (p < pattern.length && pattern[p] == '*') {
+      star = p++;
+      mark = t;
+    } else if (star != -1) {
+      p = star + 1;
+      t = ++mark;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.length && pattern[p] == '*') {
+    p++;
+  }
+  return p == pattern.length;
 }
 
 bool _bytesEqual(Uint8List a, Uint8List b) {

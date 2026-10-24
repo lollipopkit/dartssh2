@@ -120,6 +120,19 @@ void main() {
     });
   });
 
+  test('a tail cut short refuses nothing until it is read', () {
+    final full = _blob('ed25519_by_ed25519-cert.pub');
+    // Up to the key id: the certified key is whole, the rest is not.
+    final cut = Uint8List.sublistView(
+      full,
+      0,
+      _indexOf(full, utf8.encode('ed25519-by-ed25519')),
+    );
+    final cert = SSHHostCertificate.decode(cut);
+    expect(cert.publicKey, _blob('host_ed25519.pub'));
+    expect(() => cert.principals, _refused('Malformed host certificate'));
+  });
+
   test('an ECDSA certificate whose curve is not its type is refused', () {
     final data = _blob('ecdsa_by_rsa-cert.pub');
     final curve = utf8.encode('nistp384');

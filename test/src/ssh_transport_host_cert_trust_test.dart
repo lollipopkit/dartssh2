@@ -55,6 +55,14 @@ void main() {
     expect(asked, isEmpty);
   });
 
+  test('a wildcard principal covers the host, as OpenSSH reads it', () async {
+    client(trusting: ca, reachedAs: 'web.example.com');
+    final cert = ed25519HostCertificate(
+        host: host, ca: ca, principals: ['*.example.com']);
+    await server.exchange(transport, signer: host, hostKey: cert);
+    expect(asked, isEmpty);
+  });
+
   test('expired, it refuses the host rather than asking', () async {
     client(trusting: ca);
     final cert = ed25519HostCertificate(
