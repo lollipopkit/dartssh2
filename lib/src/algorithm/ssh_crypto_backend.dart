@@ -51,9 +51,9 @@ abstract class SSHCryptoBackend {
   /// pointycastle.
   ///
   /// [algorithm] is `aes128-gcm@openssh.com` or `aes256-gcm@openssh.com`.
-  /// pointycastle's GHASH runs a bit at a time — about 2 MiB/s, where AES-CTR
-  /// with HMAC does fifty (#19) — and doing better in constant time takes the
-  /// CPU's carry-less multiply, which Dart cannot reach.
+  /// pointycastle's GHASH runs a bit at a time — 1.9 MiB/s where AES-CTR with
+  /// HMAC does 58, as #19 measured them — and doing better in constant time
+  /// takes the CPU's carry-less multiply, which Dart cannot reach.
   ///
   /// Keyed once per direction of a connection, then given each packet with
   /// its own nonce; the tag is 16 bytes, after the ciphertext.

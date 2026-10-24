@@ -10,82 +10,109 @@ import 'package:test/test.dart';
 void main() {
   group('AES-GCM through a backend (#19)', () {
     tearDown(() => sshCryptoBackend = null);
-
-    final key = Uint8List.fromList(List.generate(32, (i) => i));
-    final iv = Uint8List.fromList(List.generate(12, (i) => i + 16));
     const cipherType = SSHCipherType.aes256gcm;
 
-    SSHTransport sender(_CaptureSSHSocket socket) => SSHTransport(
-          socket,
-          algorithms: const SSHAlgorithms(cipher: [cipherType]),
-        )
-          ..clientCipherType = cipherType
-          ..localCipherKey = key
-          ..localIV = iv
-          ..kexInProgress = false;
-
-    (SSHTransport, Future<Uint8List>) receiver(_CaptureSSHSocket socket) {
-      final received = Completer<Uint8List>();
+    /// One direction keyed as a key exchange keys it — which is where the
+    /// backend is asked, once, rather than per packet.
+    SSHTransport keyed(
+      _CaptureSSHSocket socket, {
+      required bool local,
+      void Function(Uint8List)? onPacket,
+    }) {
       final transport = SSHTransport(
         socket,
         algorithms: const SSHAlgorithms(cipher: [cipherType]),
-        onPacket: (packet) {
-          if (!received.isCompleted) received.complete(packet);
-        },
+        onPacket: onPacket,
       )
         ..receivedVersion('SSH-2.0-test')
-        ..serverCipherType = cipherType
-        ..remoteAeadKey = key
-        ..remoteAeadFixedNonce = iv;
-      return (transport, received.future);
+        ..kexType = SSHKexType.x25519
+        ..sharedSecret = BigInt.from(7)
+        ..exchangeHash = Uint8List.fromList(List.filled(32, 1))
+        ..sessionId = Uint8List.fromList(List.filled(32, 2))
+        ..clientCipherType = cipherType
+        ..serverCipherType = cipherType;
+      local ? transport.applyLocalKeys() : transport.applyRemoteKeys();
+      transport.kexInProgress = false;
+      return transport;
     }
 
     test('what the backend seals, pointycastle opens', () async {
       final backend = _GcmBackend();
       sshCryptoBackend = backend;
       final out = _CaptureSSHSocket();
-      final tx = sender(out);
+      final tx = keyed(out, local: true);
       for (final n in [1, 2, 3]) {
         tx.sendPacket(Uint8List.fromList([n, n]));
       }
-      // One keyed AEAD for the direction, every packet sealed through it.
+      // Made once, where the key was derived; every packet sealed through it.
       expect(backend.made, ['aes256-gcm@openssh.com']);
       expect(backend.seals, 3);
 
       sshCryptoBackend = null;
       final inbound = _CaptureSSHSocket();
-      final (rx, received) = receiver(inbound);
+      final received = Completer<Uint8List>();
+      final rx = SSHTransport(
+        inbound,
+        algorithms: const SSHAlgorithms(cipher: [cipherType]),
+        onPacket: received.complete,
+      )
+        ..receivedVersion('SSH-2.0-test')
+        ..serverCipherType = cipherType
+        ..remoteAeadKey = tx.localCipherKey
+        ..remoteAeadFixedNonce = tx.localIV;
       // After the identification line: the first of the three packets.
       inbound.addIncomingBytes(out.packets[out.packets.length - 3]);
-      expect(await received.timeout(const Duration(seconds: 2)), [1, 1]);
+      expect(await received.future.timeout(const Duration(seconds: 2)), [1, 1]);
       tx.close();
       rx.close();
     });
 
     test('what pointycastle seals, the backend opens', () async {
-      final out = _CaptureSSHSocket();
-      final tx = sender(out)..sendPacket(Uint8List.fromList([9, 8, 7]));
-
       final backend = _GcmBackend();
       sshCryptoBackend = backend;
       final inbound = _CaptureSSHSocket();
-      final (rx, received) = receiver(inbound);
+      final received = Completer<Uint8List>();
+      final rx = keyed(inbound, local: false, onPacket: received.complete);
+
+      sshCryptoBackend = null;
+      final out = _CaptureSSHSocket();
+      final tx = SSHTransport(
+        out,
+        algorithms: const SSHAlgorithms(cipher: [cipherType]),
+      )
+        ..clientCipherType = cipherType
+        ..localCipherKey = rx.remoteCipherKey
+        ..localIV = rx.remoteIV
+        ..kexInProgress = false
+        ..sendPacket(Uint8List.fromList([9, 8, 7]));
+
       inbound.addIncomingBytes(out.packets.last);
-      expect(await received.timeout(const Duration(seconds: 2)), [9, 8, 7]);
+      expect(
+          await received.future.timeout(const Duration(seconds: 2)), [9, 8, 7]);
       expect(backend.opens, 1);
       tx.close();
       rx.close();
     });
 
     test('a packet the backend will not open fails authentication', () async {
+      sshCryptoBackend = _GcmBackend();
+      final inbound = _CaptureSSHSocket();
+      final rx = keyed(inbound, local: false);
+
+      sshCryptoBackend = null;
       final out = _CaptureSSHSocket();
-      final tx = sender(out)..sendPacket(Uint8List.fromList([251, 9, 8, 7]));
+      final tx = SSHTransport(
+        out,
+        algorithms: const SSHAlgorithms(cipher: [cipherType]),
+      )
+        ..clientCipherType = cipherType
+        ..localCipherKey = rx.remoteCipherKey
+        ..localIV = rx.remoteIV
+        ..kexInProgress = false
+        ..sendPacket(Uint8List.fromList([251, 9, 8, 7]));
       final tampered = Uint8List.fromList(out.packets.last);
       tampered[tampered.length - 1] ^= 0x01;
 
-      sshCryptoBackend = _GcmBackend();
-      final inbound = _CaptureSSHSocket();
-      final (rx, _) = receiver(inbound);
       inbound.addIncomingBytes(tampered);
       await expectLater(
         rx.done,
@@ -95,6 +122,22 @@ void main() {
       );
       tx.close();
       rx.close();
+    });
+
+    test('a re-key away from GCM lets go of the backend\'s cipher', () {
+      final backend = _GcmBackend();
+      sshCryptoBackend = backend;
+      final tx = keyed(_CaptureSSHSocket(), local: true)
+        ..sendPacket(Uint8List.fromList([1]));
+      expect(backend.seals, 1);
+
+      tx
+        ..clientCipherType = SSHCipherType.aes256ctr
+        ..clientMacType = SSHMacType.hmacSha256
+        ..applyLocalKeys()
+        ..sendPacket(Uint8List.fromList([2]));
+      expect(backend.seals, 1);
+      tx.close();
     });
   });
 
