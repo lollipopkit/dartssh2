@@ -14,6 +14,10 @@ import 'package:test/test.dart';
 /// `ssh-keygen -lf <host key>.pub` prints it (`SHA256:...`). Without them it
 /// skips.
 ///
+/// With `DARTSSH2_E2E_CERT_CA` set to the authority's public key line
+/// (`ssh-ed25519 AAAA...`), trusting it is tried too; the certificate has to
+/// name the host as `DARTSSH2_E2E_CERT_HOST`.
+///
 /// A real server because this library has only the client half of a key
 /// exchange — see `ssh_auth_key_then_password_e2e_test.dart`.
 void main() {
@@ -45,5 +49,48 @@ void main() {
       expect(asked, [('ssh-ed25519', fingerprint)]);
     },
     skip: missing ? 'DARTSSH2_E2E_CERT_* unset' : false,
+  );
+
+  final ca = env['DARTSSH2_E2E_CERT_CA'];
+
+  Future<SSHClient> trusting(
+      List<String> principals, List<String> asked) async {
+    return SSHClient(
+      await SSHSocket.connect(host!, port),
+      username: user!,
+      onPasswordRequest: () => password,
+      onVerifyHostKey: (type, fp) {
+        asked.add(type);
+        return true;
+      },
+      hostCertificateTrust: SSHHostCertificateTrust(
+        authorities: [base64.decode(ca!.split(' ')[1])],
+        principals: principals,
+      ),
+    );
+  }
+
+  test(
+    'with its authority trusted, connects without asking',
+    () async {
+      final asked = <String>[];
+      final client = await trusting([host!], asked);
+      addTearDown(client.close);
+      expect(utf8.decode(await client.run('echo ok')).trim(), 'ok');
+      expect(asked, isEmpty);
+    },
+    skip: missing || ca == null ? 'DARTSSH2_E2E_CERT_* unset' : false,
+  );
+
+  test(
+    'with its authority trusted, a name it was not issued for is refused',
+    () async {
+      final asked = <String>[];
+      final client = await trusting(['not-this-host.invalid'], asked);
+      addTearDown(client.close);
+      await expectLater(client.authenticated, throwsA(anything));
+      expect(asked, isEmpty);
+    },
+    skip: missing || ca == null ? 'DARTSSH2_E2E_CERT_* unset' : false,
   );
 }

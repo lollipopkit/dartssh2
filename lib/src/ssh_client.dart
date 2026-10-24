@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/hostkey/hostkey_cert.dart';
 import 'package:dartssh2/src/http/http_client.dart';
 import 'package:dartssh2/src/sftp/sftp_client.dart';
 import 'package:dartssh2/src/dynamic_forward.dart';
@@ -232,6 +233,11 @@ class SSHClient {
   /// Allow to disable hostkey verification, which can be slow in debug mode.
   final bool disableHostkeyVerification;
 
+  /// Authorities trusted to sign this host's certificate, and the names it
+  /// is reached by. A certificate one of them signed is verified in full and
+  /// trusted without [onVerifyHostKey]; any other host key is asked about.
+  final SSHHostCertificateTrust? hostCertificateTrust;
+
   /// Identification string advertised during the SSH version exchange (the part
   /// after `SSH-2.0-`). Defaults to `'DartSSH_2.0'`
   String get ident => _ident;
@@ -269,6 +275,7 @@ class SSHClient {
     this.maxAuthAttempts = defaultMaxAuthAttempts,
     this.onHostKeys,
     this.disableHostkeyVerification = false,
+    this.hostCertificateTrust,
     this.onX11Forward,
     this.agentHandler,
     String ident = 'DartSSH_2.0',
@@ -283,6 +290,7 @@ class SSHClient {
       onReady: _handleTransportReady,
       onPacket: _handlePacket,
       disableHostkeyVerification: disableHostkeyVerification,
+      hostCertificateTrust: hostCertificateTrust,
       version: _ident,
     );
 

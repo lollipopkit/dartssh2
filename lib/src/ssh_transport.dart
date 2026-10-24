@@ -84,6 +84,11 @@ class SSHTransport {
   /// Function called when a packet is received.
   final SSHPacketHandler? onPacket;
 
+  /// Authorities trusted to sign this host's certificate, and the names it
+  /// is reached by. A certificate one of them signed is verified in full and
+  /// trusted without [onVerifyHostKey]; any other host key is asked about.
+  final SSHHostCertificateTrust? hostCertificateTrust;
+
   final bool disableHostkeyVerification;
 
   /// A [Future] that completes when the transport is closed, or when an error
@@ -110,6 +115,7 @@ class SSHTransport {
     this.onPacket,
     Duration reKeyInterval = const Duration(hours: 1),
     this.disableHostkeyVerification = false,
+    this.hostCertificateTrust,
   }) : _reKeyInterval = reKeyInterval {
     _initSocket();
     _startHandshake();
@@ -1666,6 +1672,7 @@ class SSHTransport {
     // certificate for it, and the fingerprint is the one OpenSSH prints.
     final hostkeyType = _hostkeyType!;
     var hostPublicKey = hostkey;
+    var certified = false;
     if (hostkeyType.isCertificate) {
       final SSHHostCertificate certificate;
       try {
@@ -1688,6 +1695,22 @@ class SSHTransport {
         throw SSHHostkeyError(
           'Host certificate ${certificate.type} does not match $hostkeyType',
         );
+      }
+      // The first exchange only. A re-key has the key compared below, and a
+      // certificate that expires during a session does not end it.
+      final trust = hostCertificateTrust;
+      if (!_hostkeyVerified &&
+          !disableHostkeyVerification &&
+          trust != null &&
+          trust.trusts(certificate.signatureKey)) {
+        try {
+          certificate.verify(principals: trust.principals);
+        } on SSHHostkeyError {
+          rethrow;
+        } catch (e) {
+          throw SSHHostkeyError('Malformed host certificate: $e');
+        }
+        certified = true;
       }
     }
 
@@ -1717,6 +1740,19 @@ class SSHTransport {
           (verifiedKey == null || !_bytesEqual(verifiedKey, hostPublicKey))) {
         throw SSHHostkeyError('Host key changed during re-key');
       }
+      _sendNewKeys();
+      _applyLocalKeys();
+      if (!_readyDispatched) {
+        _readyDispatched = true;
+        onReady?.call();
+      }
+      return;
+    }
+
+    // Vouched for by an authority the caller trusts: nothing to ask.
+    if (certified) {
+      _hostkeyVerified = true;
+      _verifiedHostPublicKey = hostPublicKey;
       _sendNewKeys();
       _applyLocalKeys();
       if (!_readyDispatched) {
