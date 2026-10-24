@@ -133,7 +133,8 @@ class SSHHostCertificate {
   /// may present at [now]. See the class for what is not checked here.
   void verify({DateTime? now}) {
     if (certType != hostType) {
-      throw SSHHostkeyError('Host presented a non-host certificate ($certType)');
+      throw SSHHostkeyError(
+          'Host presented a non-host certificate ($certType)');
     }
     if (criticalOptions.isNotEmpty) {
       throw SSHHostkeyError(

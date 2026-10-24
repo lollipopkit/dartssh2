@@ -30,7 +30,8 @@ void main() {
   });
 
   test('what a host certificate says is read', () {
-    final cert = SSHHostCertificate.decode(_blob('ed25519_by_ed25519-cert.pub'));
+    final cert =
+        SSHHostCertificate.decode(_blob('ed25519_by_ed25519-cert.pub'));
     expect(cert.type, 'ssh-ed25519-cert-v01@openssh.com');
     expect(cert.certType, SSHHostCertificate.hostType);
     expect(cert.keyId, 'ed25519-by-ed25519');
@@ -55,8 +56,10 @@ void main() {
   test('out of date, it is refused, and says so', () {
     final cert = SSHHostCertificate.decode(_blob('expired-cert.pub'));
     expect(() => cert.verify(), _refused('expired'));
-    expect(() => cert.verify(now: DateTime.utc(2019)), _refused('not yet valid'));
-    expect(() => cert.verify(now: DateTime.utc(2020, 1, 1, 12)), returnsNormally);
+    expect(
+        () => cert.verify(now: DateTime.utc(2019)), _refused('not yet valid'));
+    expect(
+        () => cert.verify(now: DateTime.utc(2020, 1, 1, 12)), returnsNormally);
   });
 
   test('a user certificate is not a host certificate', () {
@@ -86,7 +89,8 @@ void main() {
   });
 
   test('a plain host key is not a certificate', () {
-    expect(SSHHostCertificate.isCertificate(_blob('host_ed25519.pub')), isFalse);
+    expect(
+        SSHHostCertificate.isCertificate(_blob('host_ed25519.pub')), isFalse);
     expect(
       SSHHostCertificate.isCertificate(_blob('ed25519_by_ed25519-cert.pub')),
       isTrue,
