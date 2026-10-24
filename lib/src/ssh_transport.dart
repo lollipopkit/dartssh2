@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' show Random, max;
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/hostkey/hostkey_cert.dart';
 import 'package:dartssh2/src/hostkey/hostkey_ecdsa.dart';
 import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
 import 'package:dartssh2/src/kex/kex_dh.dart';
@@ -1313,11 +1314,12 @@ class SSHTransport {
   }
 
   bool _verifyHostkey({
+    required SSHHostkeyType? type,
     required Uint8List keyBytes,
     required Uint8List signatureBytes,
     required Uint8List exchangeHash,
   }) {
-    switch (_hostkeyType) {
+    switch (type) {
       case SSHHostkeyType.ed25519:
         final publicKey = SSHEd25519PublicKey.decode(keyBytes);
         final signature = SSHEd25519Signature.decode(signatureBytes);
@@ -1337,7 +1339,7 @@ class SSHTransport {
       case null:
         throw StateError('No hostkey type negotiated');
       default:
-        throw UnimplementedError('Unsupported hostkey type: $_hostkeyType');
+        throw UnimplementedError('Unsupported hostkey type: $type');
     }
   }
 
@@ -1654,9 +1656,29 @@ class SSHTransport {
       sharedSecret: sharedSecret,
     );
 
+    // A certificate is the host key the exchange hash covers; the key inside
+    // it signs the exchange, and is the one the user is asked to trust — so a
+    // pin taken on the plain key holds when the server starts offering a
+    // certificate for it, and the fingerprint is the one OpenSSH prints.
+    final hostkeyType = _hostkeyType!;
+    var hostPublicKey = hostkey;
+    if (hostkeyType.isCertificate) {
+      final SSHHostCertificate certificate;
+      try {
+        certificate = SSHHostCertificate.decode(hostkey);
+      } on SSHHostkeyError {
+        rethrow;
+      } catch (e) {
+        throw SSHHostkeyError('Malformed host certificate: $e');
+      }
+      if (!disableHostkeyVerification) certificate.verify();
+      hostPublicKey = certificate.publicKey;
+    }
+
     if (!disableHostkeyVerification) {
       final verified = _verifyHostkey(
-        keyBytes: hostkey,
+        type: hostkeyType.keyType,
+        keyBytes: hostPublicKey,
         signatureBytes: hostSignature,
         exchangeHash: exchangeHash,
       );
@@ -1682,7 +1704,7 @@ class SSHTransport {
       return;
     }
 
-    final fingerprint = _hostkeyFingerprint(hostkey);
+    final fingerprint = _hostkeyFingerprint(hostPublicKey);
 
     final handler = onVerifyHostKey;
     if (handler == null) {
@@ -1692,7 +1714,7 @@ class SSHTransport {
       return;
     }
 
-    final verified = await handler(_hostkeyType!.name, fingerprint);
+    final verified = await handler(hostkeyType.keyType.name, fingerprint);
     if (!verified) {
       closeWithError(SSHHostkeyError('Hostkey verification failed by user'));
       return;

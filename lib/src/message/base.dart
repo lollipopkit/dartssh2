@@ -65,6 +65,9 @@ class SSHMessageReader {
 
   bool get isDone => _offset >= data.length;
 
+  /// How far into [data] reading has got.
+  int get offset => _offset;
+
   void skip(int bytes) {
     _offset += bytes;
   }
@@ -96,7 +99,8 @@ class SSHMessageReader {
   }
 
   Uint8List readBytes(int length) {
-    final value = Uint8List.view(_byteData.buffer, _offset, length);
+    // Relative to [data], which may itself be a view into a larger buffer.
+    final value = Uint8List.sublistView(data, _offset, _offset + length);
     _offset += length;
     return value;
   }

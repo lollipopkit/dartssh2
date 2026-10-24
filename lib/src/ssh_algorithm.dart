@@ -101,7 +101,15 @@ class SSHAlgorithms {
       SSHKexType.dh14Sha256,
       SSHKexType.dhGexSha256,
     ],
+    // Certificates first, as OpenSSH orders them: a server that has one for
+    // its key offers both, and the certificate is what it would rather show.
     this.hostkey = const [
+      SSHHostkeyType.ed25519Cert,
+      SSHHostkeyType.ecdsa521Cert,
+      SSHHostkeyType.ecdsa384Cert,
+      SSHHostkeyType.ecdsa256Cert,
+      SSHHostkeyType.rsaSha512Cert,
+      SSHHostkeyType.rsaSha256Cert,
       SSHHostkeyType.ed25519,
       SSHHostkeyType.ecdsa521,
       SSHHostkeyType.ecdsa384,

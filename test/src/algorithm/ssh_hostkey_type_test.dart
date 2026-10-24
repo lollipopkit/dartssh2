@@ -13,6 +13,28 @@ void main() {
       expect(SSHHostkeyType.ed25519.name, equals('ssh-ed25519'));
     });
 
+    test('a certificate signs with the key it certifies', () {
+      final certs = {
+        SSHHostkeyType.rsaSha1Cert: SSHHostkeyType.rsaSha1,
+        SSHHostkeyType.rsaSha256Cert: SSHHostkeyType.rsaSha256,
+        SSHHostkeyType.rsaSha512Cert: SSHHostkeyType.rsaSha512,
+        SSHHostkeyType.ecdsa256Cert: SSHHostkeyType.ecdsa256,
+        SSHHostkeyType.ecdsa384Cert: SSHHostkeyType.ecdsa384,
+        SSHHostkeyType.ecdsa521Cert: SSHHostkeyType.ecdsa521,
+        SSHHostkeyType.ed25519Cert: SSHHostkeyType.ed25519,
+      };
+      for (final MapEntry(key: cert, value: key) in certs.entries) {
+        expect(cert.isCertificate, isTrue);
+        expect(cert.keyType, same(key));
+        expect(cert.name, endsWith('-cert-v01@openssh.com'));
+        expect(key.isCertificate, isFalse);
+        expect(key.keyType, same(key));
+      }
+      expect(SSHHostkeyType.rsaSha1Cert.name, 'ssh-rsa-cert-v01@openssh.com');
+      expect(SSHHostkeyType.rsaSha512Cert.name,
+          'rsa-sha2-512-cert-v01@openssh.com');
+    });
+
     test('toString() returns correct format', () {
       expect(
           SSHHostkeyType.rsaSha1.toString(), equals('SSHHostkeyType(ssh-rsa)'));
