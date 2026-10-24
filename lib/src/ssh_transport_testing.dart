@@ -61,4 +61,16 @@ extension SSHTransportTesting on SSHTransport {
   void applyRemoteKeys() => _applyRemoteKeys();
   Future<void> handleMessageKexInit(Uint8List payload) =>
       _handleMessageKexInit(payload);
+
+  /// What a test playing the server needs to answer the exchange: the
+  /// client's identification, its KEXINIT, and its ECDH public key.
+  String get localVersion => _localVersion;
+  Uint8List? get localKexInit => _localKexInit;
+  Uint8List? get kexPublicKey => switch (_kex) {
+        final SSHKexECDH kex => kex.publicKey,
+        _ => null,
+      };
+  Future<void> handleMessageKexReply(Uint8List payload) =>
+      _handleMessageKexReply(payload);
+  Future<void> handleMessageNewKeys() => _handleMessageNewKeys(Uint8List(0));
 }
