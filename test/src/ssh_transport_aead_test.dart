@@ -4,9 +4,100 @@ import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:dartssh2/src/ssh_transport.dart';
+import 'package:pointycastle/export.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('AES-GCM through a backend (#19)', () {
+    tearDown(() => sshCryptoBackend = null);
+
+    final key = Uint8List.fromList(List.generate(32, (i) => i));
+    final iv = Uint8List.fromList(List.generate(12, (i) => i + 16));
+    const cipherType = SSHCipherType.aes256gcm;
+
+    SSHTransport sender(_CaptureSSHSocket socket) => SSHTransport(
+          socket,
+          algorithms: const SSHAlgorithms(cipher: [cipherType]),
+        )
+          ..clientCipherType = cipherType
+          ..localCipherKey = key
+          ..localIV = iv
+          ..kexInProgress = false;
+
+    (SSHTransport, Future<Uint8List>) receiver(_CaptureSSHSocket socket) {
+      final received = Completer<Uint8List>();
+      final transport = SSHTransport(
+        socket,
+        algorithms: const SSHAlgorithms(cipher: [cipherType]),
+        onPacket: (packet) {
+          if (!received.isCompleted) received.complete(packet);
+        },
+      )
+        ..receivedVersion('SSH-2.0-test')
+        ..serverCipherType = cipherType
+        ..remoteAeadKey = key
+        ..remoteAeadFixedNonce = iv;
+      return (transport, received.future);
+    }
+
+    test('what the backend seals, pointycastle opens', () async {
+      final backend = _GcmBackend();
+      sshCryptoBackend = backend;
+      final out = _CaptureSSHSocket();
+      final tx = sender(out);
+      for (final n in [1, 2, 3]) {
+        tx.sendPacket(Uint8List.fromList([n, n]));
+      }
+      // One keyed AEAD for the direction, every packet sealed through it.
+      expect(backend.made, ['aes256-gcm@openssh.com']);
+      expect(backend.seals, 3);
+
+      sshCryptoBackend = null;
+      final inbound = _CaptureSSHSocket();
+      final (rx, received) = receiver(inbound);
+      // After the identification line: the first of the three packets.
+      inbound.addIncomingBytes(out.packets[out.packets.length - 3]);
+      expect(await received.timeout(const Duration(seconds: 2)), [1, 1]);
+      tx.close();
+      rx.close();
+    });
+
+    test('what pointycastle seals, the backend opens', () async {
+      final out = _CaptureSSHSocket();
+      final tx = sender(out)..sendPacket(Uint8List.fromList([9, 8, 7]));
+
+      final backend = _GcmBackend();
+      sshCryptoBackend = backend;
+      final inbound = _CaptureSSHSocket();
+      final (rx, received) = receiver(inbound);
+      inbound.addIncomingBytes(out.packets.last);
+      expect(await received.timeout(const Duration(seconds: 2)), [9, 8, 7]);
+      expect(backend.opens, 1);
+      tx.close();
+      rx.close();
+    });
+
+    test('a packet the backend will not open fails authentication', () async {
+      final out = _CaptureSSHSocket();
+      final tx = sender(out)..sendPacket(Uint8List.fromList([251, 9, 8, 7]));
+      final tampered = Uint8List.fromList(out.packets.last);
+      tampered[tampered.length - 1] ^= 0x01;
+
+      sshCryptoBackend = _GcmBackend();
+      final inbound = _CaptureSSHSocket();
+      final (rx, _) = receiver(inbound);
+      inbound.addIncomingBytes(tampered);
+      await expectLater(
+        rx.done,
+        throwsA(predicate((e) =>
+            e is SSHPacketError &&
+            e.toString().contains('AEAD authentication failed'))),
+      );
+      tx.close();
+      rx.close();
+    });
+  });
+
   group('SSHTransport AEAD', () {
     test('exchanges packets with AES-GCM', () async {
       for (final cipherType in [
@@ -703,4 +794,47 @@ class _CaptureSink implements StreamSink<List<int>> {
 
   @override
   Future<void> get done async {}
+}
+
+/// A backend whose AES-GCM is pointycastle's, counted: what it seals has to
+/// be what the library seals without it.
+class _GcmBackend extends SSHCryptoBackend {
+  final made = <String>[];
+  var seals = 0;
+  var opens = 0;
+
+  @override
+  SSHAeadCipher? createAead(String algorithm, Uint8List key) {
+    made.add(algorithm);
+    return _PointycastleGcm(this, key);
+  }
+}
+
+class _PointycastleGcm implements SSHAeadCipher {
+  _PointycastleGcm(this.backend, this.key);
+
+  final _GcmBackend backend;
+  final Uint8List key;
+
+  Uint8List _run(bool encrypt, Uint8List nonce, Uint8List aad, Uint8List in_) {
+    final cipher = GCMBlockCipher(AESEngine())
+      ..init(encrypt, AEADParameters(KeyParameter(key), 128, nonce, aad));
+    return cipher.process(in_);
+  }
+
+  @override
+  Uint8List seal(Uint8List nonce, Uint8List aad, Uint8List plaintext) {
+    backend.seals++;
+    return _run(true, nonce, aad, plaintext);
+  }
+
+  @override
+  Uint8List? open(Uint8List nonce, Uint8List aad, Uint8List sealed) {
+    backend.opens++;
+    try {
+      return _run(false, nonce, aad, sealed);
+    } on InvalidCipherTextException {
+      return null;
+    }
+  }
 }

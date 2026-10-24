@@ -47,6 +47,18 @@ abstract class SSHCryptoBackend {
   }) =>
       null;
 
+  /// AES-GCM for [algorithm] under [key], or `null` to leave it to
+  /// pointycastle.
+  ///
+  /// [algorithm] is `aes128-gcm@openssh.com` or `aes256-gcm@openssh.com`.
+  /// pointycastle's GHASH runs a bit at a time — about 2 MiB/s, where AES-CTR
+  /// with HMAC does fifty (#19) — and doing better in constant time takes the
+  /// CPU's carry-less multiply, which Dart cannot reach.
+  ///
+  /// Keyed once per direction of a connection, then given each packet with
+  /// its own nonce; the tag is 16 bytes, after the ciphertext.
+  SSHAeadCipher? createAead(String algorithm, Uint8List key) => null;
+
   /// A MAC for [algorithm] under [key], or `null` to leave it to pointycastle.
   ///
   /// [algorithm] is the name of the underlying HMAC — `hmac-sha2-256` — with
@@ -132,6 +144,18 @@ abstract class SSHCryptoBackend {
 /// Read when a connection installs its keys, so a change takes effect on the
 /// next connection and never mid-session.
 SSHCryptoBackend? sshCryptoBackend;
+
+/// An AEAD keyed for one direction of a connection — see
+/// [SSHCryptoBackend.createAead].
+abstract interface class SSHAeadCipher {
+  /// [plaintext] encrypted under [nonce], with [aad] authenticated alongside:
+  /// the ciphertext, then the tag.
+  Uint8List seal(Uint8List nonce, Uint8List aad, Uint8List plaintext);
+
+  /// [sealed] — ciphertext, then tag — decrypted under [nonce]; `null` when
+  /// the tag does not cover it and [aad].
+  Uint8List? open(Uint8List nonce, Uint8List aad, Uint8List sealed);
+}
 
 /// A [BlockCipher] that can transform a whole packet in one call.
 ///

@@ -203,6 +203,12 @@ class SSHTransport {
   // AEAD (GCM / ChaCha20-Poly1305) keys and nonces (per direction)
   Uint8List? _localAeadKey; // key for data we send
   Uint8List? _remoteAeadKey; // key for data we receive
+
+  /// The backend's AES-GCM for each direction, keyed by the key it was made
+  /// for: a re-key brings a new key and so a new one. Null inside the record
+  /// once asked and refused, so pointycastle is not asked for per packet.
+  (Uint8List, SSHAeadCipher?)? _localGcm;
+  (Uint8List, SSHAeadCipher?)? _remoteGcm;
   Uint8List?
       _remoteAeadFixedNonce; // 12-byte fixed part of nonce for data we receive
 
@@ -399,6 +405,8 @@ class SSHTransport {
     }
 
     final encrypted = _processAead(
+      cipherType: cipherType,
+      local: true,
       key: _localCipherKey!,
       iv: _localIV!,
       sequence: _localAeadPacketCount++,
@@ -422,6 +430,8 @@ class SSHTransport {
   }
 
   Uint8List _processAead({
+    required SSHCipherType cipherType,
+    required bool local,
     required Uint8List key,
     required Uint8List iv,
     required int sequence,
@@ -429,13 +439,36 @@ class SSHTransport {
     required Uint8List input,
     required bool forEncryption,
   }) {
-    final cipher = GCMBlockCipher(AESEngine());
     final nonce = _nonceForSequence(iv, sequence);
+    final native = _backendGcm(cipherType, key, local: local);
+    if (native != null) {
+      if (forEncryption) return native.seal(nonce, aad, input);
+      return native.open(nonce, aad, input) ??
+          (throw InvalidCipherTextException('mac check in GCM failed'));
+    }
+    final cipher = GCMBlockCipher(AESEngine());
     cipher.init(
       forEncryption,
       AEADParameters(KeyParameter(key), 128, nonce, aad),
     );
     return cipher.process(input);
+  }
+
+  /// The backend's AES-GCM under [key], asked for once per key and direction.
+  SSHAeadCipher? _backendGcm(
+    SSHCipherType cipherType,
+    Uint8List key, {
+    required bool local,
+  }) {
+    final cached = local ? _localGcm : _remoteGcm;
+    if (cached != null && identical(cached.$1, key)) return cached.$2;
+    final made = (key, sshCryptoBackend?.createAead(cipherType.name, key));
+    if (local) {
+      _localGcm = made;
+    } else {
+      _remoteGcm = made;
+    }
+    return made.$2;
   }
 
   Uint8List _nonceForSequence(Uint8List iv, int sequence) {
@@ -817,6 +850,8 @@ class SSHTransport {
     late Uint8List plaintext;
     try {
       plaintext = _processAead(
+        cipherType: cipherType,
+        local: false,
         key: _remoteAeadKey!,
         iv: _remoteAeadFixedNonce!,
         sequence: _remoteAeadPacketCount++,
