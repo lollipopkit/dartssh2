@@ -4,9 +4,143 @@ import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:dartssh2/src/ssh_transport.dart';
+import 'package:pointycastle/export.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('AES-GCM through a backend (#19)', () {
+    tearDown(() => sshCryptoBackend = null);
+    const cipherType = SSHCipherType.aes256gcm;
+
+    /// One direction keyed as a key exchange keys it — which is where the
+    /// backend is asked, once, rather than per packet.
+    SSHTransport keyed(
+      _CaptureSSHSocket socket, {
+      required bool local,
+      void Function(Uint8List)? onPacket,
+    }) {
+      final transport = SSHTransport(
+        socket,
+        algorithms: const SSHAlgorithms(cipher: [cipherType]),
+        onPacket: onPacket,
+      )
+        ..receivedVersion('SSH-2.0-test')
+        ..kexType = SSHKexType.x25519
+        ..sharedSecret = BigInt.from(7)
+        ..exchangeHash = Uint8List.fromList(List.filled(32, 1))
+        ..sessionId = Uint8List.fromList(List.filled(32, 2))
+        ..clientCipherType = cipherType
+        ..serverCipherType = cipherType;
+      local ? transport.applyLocalKeys() : transport.applyRemoteKeys();
+      transport.kexInProgress = false;
+      return transport;
+    }
+
+    test('what the backend seals, pointycastle opens', () async {
+      final backend = _GcmBackend();
+      sshCryptoBackend = backend;
+      final out = _CaptureSSHSocket();
+      final tx = keyed(out, local: true);
+      for (final n in [1, 2, 3]) {
+        tx.sendPacket(Uint8List.fromList([n, n]));
+      }
+      // Made once, where the key was derived; every packet sealed through it.
+      expect(backend.made, ['aes256-gcm@openssh.com']);
+      expect(backend.seals, 3);
+
+      sshCryptoBackend = null;
+      final inbound = _CaptureSSHSocket();
+      final received = Completer<Uint8List>();
+      final rx = SSHTransport(
+        inbound,
+        algorithms: const SSHAlgorithms(cipher: [cipherType]),
+        onPacket: received.complete,
+      )
+        ..receivedVersion('SSH-2.0-test')
+        ..serverCipherType = cipherType
+        ..remoteAeadKey = tx.localCipherKey
+        ..remoteAeadFixedNonce = tx.localIV;
+      // After the identification line: the first of the three packets.
+      inbound.addIncomingBytes(out.packets[out.packets.length - 3]);
+      expect(await received.future.timeout(const Duration(seconds: 2)), [1, 1]);
+      tx.close();
+      rx.close();
+    });
+
+    test('what pointycastle seals, the backend opens', () async {
+      final backend = _GcmBackend();
+      sshCryptoBackend = backend;
+      final inbound = _CaptureSSHSocket();
+      final received = Completer<Uint8List>();
+      final rx = keyed(inbound, local: false, onPacket: received.complete);
+
+      sshCryptoBackend = null;
+      final out = _CaptureSSHSocket();
+      final tx = SSHTransport(
+        out,
+        algorithms: const SSHAlgorithms(cipher: [cipherType]),
+      )
+        ..clientCipherType = cipherType
+        ..localCipherKey = rx.remoteCipherKey
+        ..localIV = rx.remoteIV
+        ..kexInProgress = false
+        ..sendPacket(Uint8List.fromList([9, 8, 7]));
+
+      inbound.addIncomingBytes(out.packets.last);
+      expect(
+          await received.future.timeout(const Duration(seconds: 2)), [9, 8, 7]);
+      expect(backend.opens, 1);
+      tx.close();
+      rx.close();
+    });
+
+    test('a packet the backend will not open fails authentication', () async {
+      sshCryptoBackend = _GcmBackend();
+      final inbound = _CaptureSSHSocket();
+      final rx = keyed(inbound, local: false);
+
+      sshCryptoBackend = null;
+      final out = _CaptureSSHSocket();
+      final tx = SSHTransport(
+        out,
+        algorithms: const SSHAlgorithms(cipher: [cipherType]),
+      )
+        ..clientCipherType = cipherType
+        ..localCipherKey = rx.remoteCipherKey
+        ..localIV = rx.remoteIV
+        ..kexInProgress = false
+        ..sendPacket(Uint8List.fromList([251, 9, 8, 7]));
+      final tampered = Uint8List.fromList(out.packets.last);
+      tampered[tampered.length - 1] ^= 0x01;
+
+      inbound.addIncomingBytes(tampered);
+      await expectLater(
+        rx.done,
+        throwsA(predicate((e) =>
+            e is SSHPacketError &&
+            e.toString().contains('AEAD authentication failed'))),
+      );
+      tx.close();
+      rx.close();
+    });
+
+    test('a re-key away from GCM lets go of the backend\'s cipher', () {
+      final backend = _GcmBackend();
+      sshCryptoBackend = backend;
+      final tx = keyed(_CaptureSSHSocket(), local: true)
+        ..sendPacket(Uint8List.fromList([1]));
+      expect(backend.seals, 1);
+
+      tx
+        ..clientCipherType = SSHCipherType.aes256ctr
+        ..clientMacType = SSHMacType.hmacSha256
+        ..applyLocalKeys()
+        ..sendPacket(Uint8List.fromList([2]));
+      expect(backend.seals, 1);
+      tx.close();
+    });
+  });
+
   group('SSHTransport AEAD', () {
     test('exchanges packets with AES-GCM', () async {
       for (final cipherType in [
@@ -703,4 +837,47 @@ class _CaptureSink implements StreamSink<List<int>> {
 
   @override
   Future<void> get done async {}
+}
+
+/// A backend whose AES-GCM is pointycastle's, counted: what it seals has to
+/// be what the library seals without it.
+class _GcmBackend extends SSHCryptoBackend {
+  final made = <String>[];
+  var seals = 0;
+  var opens = 0;
+
+  @override
+  SSHAeadCipher? createAead(String algorithm, Uint8List key) {
+    made.add(algorithm);
+    return _PointycastleGcm(this, key);
+  }
+}
+
+class _PointycastleGcm implements SSHAeadCipher {
+  _PointycastleGcm(this.backend, this.key);
+
+  final _GcmBackend backend;
+  final Uint8List key;
+
+  Uint8List _run(bool encrypt, Uint8List nonce, Uint8List aad, Uint8List in_) {
+    final cipher = GCMBlockCipher(AESEngine())
+      ..init(encrypt, AEADParameters(KeyParameter(key), 128, nonce, aad));
+    return cipher.process(in_);
+  }
+
+  @override
+  Uint8List seal(Uint8List nonce, Uint8List aad, Uint8List plaintext) {
+    backend.seals++;
+    return _run(true, nonce, aad, plaintext);
+  }
+
+  @override
+  Uint8List? open(Uint8List nonce, Uint8List aad, Uint8List sealed) {
+    backend.opens++;
+    try {
+      return _run(false, nonce, aad, sealed);
+    } on InvalidCipherTextException {
+      return null;
+    }
+  }
 }

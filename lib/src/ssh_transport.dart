@@ -203,6 +203,11 @@ class SSHTransport {
   // AEAD (GCM / ChaCha20-Poly1305) keys and nonces (per direction)
   Uint8List? _localAeadKey; // key for data we send
   Uint8List? _remoteAeadKey; // key for data we receive
+
+  /// The backend's AES-GCM for each direction, made where the key is derived
+  /// and dropped with it; null for pointycastle, or another cipher.
+  SSHAeadCipher? _localAead;
+  SSHAeadCipher? _remoteAead;
   Uint8List?
       _remoteAeadFixedNonce; // 12-byte fixed part of nonce for data we receive
 
@@ -399,6 +404,7 @@ class SSHTransport {
     }
 
     final encrypted = _processAead(
+      native: _localAead,
       key: _localCipherKey!,
       iv: _localIV!,
       sequence: _localAeadPacketCount++,
@@ -422,6 +428,7 @@ class SSHTransport {
   }
 
   Uint8List _processAead({
+    required SSHAeadCipher? native,
     required Uint8List key,
     required Uint8List iv,
     required int sequence,
@@ -429,8 +436,13 @@ class SSHTransport {
     required Uint8List input,
     required bool forEncryption,
   }) {
-    final cipher = GCMBlockCipher(AESEngine());
     final nonce = _nonceForSequence(iv, sequence);
+    if (native != null) {
+      if (forEncryption) return native.seal(nonce, aad, input);
+      return native.open(nonce, aad, input) ??
+          (throw InvalidCipherTextException('mac check in GCM failed'));
+    }
+    final cipher = GCMBlockCipher(AESEngine());
     cipher.init(
       forEncryption,
       AEADParameters(KeyParameter(key), 128, nonce, aad),
@@ -457,6 +469,7 @@ class SSHTransport {
     _socketSubscription = null;
     _reKeyTimer?.cancel();
     _reKeyTimer = null;
+    _localAead = _remoteAead = null;
     _doneCompleter.complete();
     socket.destroy();
   }
@@ -466,6 +479,7 @@ class SSHTransport {
     if (isClosed) return;
     _socketSubscription?.cancel();
     _socketSubscription = null;
+    _localAead = _remoteAead = null;
     _doneCompleter.completeError(error, stackTrace ?? StackTrace.current);
     socket.destroy();
   }
@@ -817,6 +831,7 @@ class SSHTransport {
     late Uint8List plaintext;
     try {
       plaintext = _processAead(
+        native: _remoteAead,
         key: _remoteAeadKey!,
         iv: _remoteAeadFixedNonce!,
         sequence: _remoteAeadPacketCount++,
@@ -1083,6 +1098,7 @@ class SSHTransport {
         _localChaChaLenKey = lenKey;
         _localChaChaEncKey = encKey;
         _localAeadKey = null;
+        _localAead = null;
         _localCipherKey = null;
         _localIV = null;
       } else {
@@ -1096,6 +1112,7 @@ class SSHTransport {
           cipherType.ivSize,
         );
         _localAeadKey = key;
+        _localAead = sshCryptoBackend?.createAead(cipherType.name, key);
         _localCipherKey = key;
         _localIV = iv;
         _localChaChaEncKey = null;
@@ -1130,6 +1147,7 @@ class SSHTransport {
       _localMac = macType.createMac(macKey);
 
       _localAeadKey = null;
+      _localAead = null;
       _localCipherKey = null;
       _localIV = null;
       _localChaChaEncKey = null;
@@ -1152,6 +1170,7 @@ class SSHTransport {
         _remoteChaChaLenKey = lenKey;
         _remoteChaChaEncKey = encKey;
         _remoteAeadKey = null;
+        _remoteAead = null;
         _remoteAeadFixedNonce = null;
         _remoteCipherKey = null;
         _remoteIV = null;
@@ -1165,6 +1184,7 @@ class SSHTransport {
           cipherType.ivSize,
         );
         _remoteAeadKey = key;
+        _remoteAead = sshCryptoBackend?.createAead(cipherType.name, key);
         _remoteAeadFixedNonce = Uint8List.sublistView(iv, 0, 12);
         _remoteCipherKey = key;
         _remoteIV = iv;
@@ -1199,6 +1219,7 @@ class SSHTransport {
       _remoteMac = macType.createMac(macKey);
 
       _remoteAeadKey = null;
+      _remoteAead = null;
       _remoteAeadFixedNonce = null;
       _remoteCipherKey = null;
       _remoteIV = null;
