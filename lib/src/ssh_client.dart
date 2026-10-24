@@ -234,8 +234,9 @@ class SSHClient {
   final bool disableHostkeyVerification;
 
   /// Authorities trusted to sign this host's certificate, and the names it
-  /// is reached by. A certificate one of them signed is verified in full and
-  /// trusted without [onVerifyHostKey]; any other host key is asked about.
+  /// is reached by. A certificate one of them signed that verifies in full is
+  /// trusted without [onVerifyHostKey]; any other host key is asked about,
+  /// a certificate's as its plain key.
   final SSHHostCertificateTrust? hostCertificateTrust;
 
   /// Identification string advertised during the SSH version exchange (the part

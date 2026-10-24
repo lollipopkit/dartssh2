@@ -7,7 +7,9 @@ import 'package:test/test.dart';
 import 'helpers/test_kex_server.dart';
 
 /// A host certificate signed by an authority the caller trusts, as OpenSSH's
-/// `@cert-authority`: verified in full, and then nothing is asked.
+/// `@cert-authority`: verified in full, and then nothing is asked. One that
+/// does not verify is not refused: its key is asked about as a plain one, as
+/// OpenSSH retries with the plain key.
 void main() {
   final server =
       TestKexServer(hostKeyAlgorithms: ['ssh-ed25519-cert-v01@openssh.com']);
@@ -34,8 +36,11 @@ void main() {
     );
   }
 
-  Matcher refused(String why) => throwsA(isA<SSHHostkeyError>()
-      .having((e) => e.message, 'message', contains(why)));
+  /// As a plain host key: the certified key's type, and nothing trusted.
+  void askedAboutPlainKey() {
+    expect(asked, hasLength(1));
+    expect(asked.single.$1, 'ssh-ed25519');
+  }
 
   tearDown(() => transport.close());
 
@@ -63,7 +68,7 @@ void main() {
     expect(asked, isEmpty);
   });
 
-  test('expired, it refuses the host rather than asking', () async {
+  test('expired, its key is asked about instead', () async {
     client(trusting: ca);
     final cert = ed25519HostCertificate(
       host: host,
@@ -71,30 +76,32 @@ void main() {
       validAfter: now - 7200,
       validBefore: now - 3600,
     );
-    await expectLater(
-      server.exchange(transport, signer: host, hostKey: cert),
-      refused('expired'),
-    );
-    expect(asked, isEmpty);
+    await server.exchange(transport, signer: host, hostKey: cert);
+    askedAboutPlainKey();
   });
 
-  test('issued for another host, it is refused', () async {
+  test('issued for another host, its key is asked about instead', () async {
     client(trusting: ca);
     final cert =
         ed25519HostCertificate(host: host, ca: ca, principals: ['db-01']);
-    await expectLater(
-      server.exchange(transport, signer: host, hostKey: cert),
-      refused('not valid for web-01'),
-    );
+    await server.exchange(transport, signer: host, hostKey: cert);
+    askedAboutPlainKey();
   });
 
-  test('a user certificate from a trusted authority is refused', () async {
+  test('a user certificate from a trusted authority is not trusted', () async {
     client(trusting: ca);
     final cert = ed25519HostCertificate(host: host, ca: ca, certType: 1);
-    await expectLater(
-      server.exchange(transport, signer: host, hostKey: cert),
-      refused('non-host certificate'),
-    );
+    await server.exchange(transport, signer: host, hostKey: cert);
+    askedAboutPlainKey();
+  });
+
+  test('a tail that will not parse is asked about, not refused', () async {
+    client(trusting: ca);
+    final cert = ed25519HostCertificate(host: host, ca: ca);
+    // The certified key whole, everything after it gone.
+    final cut = Uint8List.sublistView(cert, 0, cert.length - 120);
+    await server.exchange(transport, signer: host, hostKey: cut);
+    askedAboutPlainKey();
   });
 
   test('from an authority not trusted, the certified key is asked about',

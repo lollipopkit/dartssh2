@@ -32,11 +32,11 @@ class SSHHostCertificateTrust {
 /// An OpenSSH host certificate (PROTOCOL.certkeys): a host key, signed by a
 /// certificate authority.
 ///
-/// With no authority trusted for the host, only [publicKey] matters: OpenSSH
-/// says "No matching CA found. Retry with plain key" and checks nothing else,
-/// since anyone can sign a certificate. Signed by a trusted one, [verify]
-/// decides, and a certificate it refuses refuses the host — OpenSSH fails the
-/// connection there too.
+/// Signed by an authority the caller trusts, and passing [verify], the host
+/// is trusted. Otherwise only [publicKey] matters: OpenSSH says "No matching
+/// CA found. Retry with plain key" — for a certificate [verify] refuses as
+/// much as for one no trusted authority signed — and the key inside is
+/// trusted the way a plain host key is.
 ///
 /// Everything after the certified key is read only when asked for, so a
 /// certificate whose tail no authority will ever look at cannot turn a host

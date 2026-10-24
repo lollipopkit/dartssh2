@@ -85,8 +85,9 @@ class SSHTransport {
   final SSHPacketHandler? onPacket;
 
   /// Authorities trusted to sign this host's certificate, and the names it
-  /// is reached by. A certificate one of them signed is verified in full and
-  /// trusted without [onVerifyHostKey]; any other host key is asked about.
+  /// is reached by. A certificate one of them signed that verifies in full is
+  /// trusted without [onVerifyHostKey]; any other host key is asked about,
+  /// a certificate's as its plain key.
   final SSHHostCertificateTrust? hostCertificateTrust;
 
   final bool disableHostkeyVerification;
@@ -1699,18 +1700,8 @@ class SSHTransport {
       // The first exchange only. A re-key has the key compared below, and a
       // certificate that expires during a session does not end it.
       final trust = hostCertificateTrust;
-      if (!_hostkeyVerified &&
-          !disableHostkeyVerification &&
-          trust != null &&
-          trust.trusts(certificate.signatureKey)) {
-        try {
-          certificate.verify(principals: trust.principals);
-        } on SSHHostkeyError {
-          rethrow;
-        } catch (e) {
-          throw SSHHostkeyError('Malformed host certificate: $e');
-        }
-        certified = true;
+      if (!_hostkeyVerified && !disableHostkeyVerification && trust != null) {
+        certified = _certifiedBy(certificate, trust);
       }
     }
 
@@ -1785,6 +1776,30 @@ class SSHTransport {
     if (!_readyDispatched) {
       _readyDispatched = true;
       onReady?.call();
+    }
+  }
+
+  /// Whether one of [trust]'s authorities vouches for this host with
+  /// [certificate].
+  ///
+  /// One it does not vouch for — another authority's, out of date, issued for
+  /// another name — refuses nothing: the key inside is asked about as a plain
+  /// host key, as OpenSSH says "No matching CA found. Retry with plain key"
+  /// whichever of those it was.
+  bool _certifiedBy(
+    SSHHostCertificate certificate,
+    SSHHostCertificateTrust trust,
+  ) {
+    try {
+      if (!trust.trusts(certificate.signatureKey)) return false;
+      certificate.verify(principals: trust.principals);
+      return true;
+    } catch (e) {
+      printDebug?.call(
+        'SSHTransport: host certificate not accepted ($e), '
+        'retrying with the plain key',
+      );
+      return false;
     }
   }
 
