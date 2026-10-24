@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dartssh2/dartssh2.dart';
+import 'package:dartssh2/src/ssh_transport.dart';
 import 'package:pinenacl/ed25519.dart';
 import 'package:test/test.dart';
 
@@ -36,10 +37,17 @@ void main() {
     );
   }
 
-  /// As a plain host key: the certified key's type, and nothing trusted.
+  /// As a plain host key: the certified key's type and fingerprint, and
+  /// nothing trusted.
   void askedAboutPlainKey() {
     expect(asked, hasLength(1));
     expect(asked.single.$1, 'ssh-ed25519');
+    expect(
+      asked.single.$2,
+      utf8.decode(
+        SSHTransportTesting.hostkeyFingerprint(ed25519PublicKey(host)),
+      ),
+    );
   }
 
   tearDown(() => transport.close());
