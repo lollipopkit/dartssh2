@@ -83,13 +83,13 @@ void main() {
   );
 
   test(
-    'with its authority trusted, a name it was not issued for is refused',
+    'with its authority trusted, a name it was not issued for is asked about',
     () async {
       final asked = <String>[];
       final client = await trusting(['not-this-host.invalid'], asked);
       addTearDown(client.close);
-      await expectLater(client.authenticated, throwsA(anything));
-      expect(asked, isEmpty);
+      expect(utf8.decode(await client.run('echo ok')).trim(), 'ok');
+      expect(asked, ['ssh-ed25519']);
     },
     skip: missing || ca == null ? 'DARTSSH2_E2E_CERT_* unset' : false,
   );
