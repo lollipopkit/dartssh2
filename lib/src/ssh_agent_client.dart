@@ -7,6 +7,7 @@ import 'package:dartssh2/src/socket/ssh_socket.dart';
 import 'package:dartssh2/src/ssh_agent.dart';
 import 'package:dartssh2/src/ssh_errors.dart';
 import 'package:dartssh2/src/ssh_signer.dart';
+import 'package:dartssh2/src/ssh_transport.dart';
 
 /// The client half of the ssh-agent protocol (draft-miller-ssh-agent): lists
 /// the keys an agent the user runs holds, and has it sign with them. The
@@ -14,7 +15,11 @@ import 'package:dartssh2/src/ssh_signer.dart';
 ///
 /// One request is on the wire at a time; the next is sent once the previous
 /// is answered.
-class SSHAgentClient {
+///
+/// As an [SSHAgentHandler] it forwards the agent ([SSHClient.forwardAgent]):
+/// the server's requests reach it as they came, every kind of them, as
+/// OpenSSH's `ForwardAgent` passes them.
+class SSHAgentClient implements SSHAgentHandler {
   SSHAgentClient(this._socket, {this.timeout = defaultTimeout}) {
     _subscription = _socket.stream.listen(
       _handleData,
@@ -92,7 +97,59 @@ class SSHAgentClient {
     await _socket.close();
   }
 
+  /// [request] passed on as it came, and the agent's reply as it is: what
+  /// forwarding the agent to a server is. An empty one, which no frame can
+  /// carry, is refused here.
+  @override
+  Future<Uint8List> handleRequest(Uint8List request) async {
+    if (request.isEmpty) {
+      return Uint8List.fromList([SSHAgentProtocol.failure]);
+    }
+    return _send(request);
+  }
+
+  /// Binds this connection to [binding]'s session
+  /// (`session-bind@openssh.com`), [forwarding] when it serves a server's
+  /// requests rather than this client's own. A key added with destination
+  /// constraints (`ssh-add -h`) is then used only where they allow.
+  ///
+  /// False from an agent that does not know the extension, which is no reason
+  /// to stop using it. The agent reads every session one connection is bound
+  /// to as a hop on a path, so a connection serves one [SSHClient], as each
+  /// `ssh` opens its own.
+  Future<bool> bind(
+    SSHSessionBinding binding, {
+    required bool forwarding,
+  }) async {
+    final request = SSHMessageWriter()
+      ..writeUint8(SSHAgentProtocol.extension)
+      ..writeUtf8('session-bind@openssh.com')
+      ..writeString(binding.hostKey)
+      ..writeString(binding.sessionId)
+      ..writeString(binding.signature)
+      ..writeBool(forwarding);
+    final reply = await _send(request.takeBytes());
+    return reply.isNotEmpty && reply.first == SSHAgentProtocol.success;
+  }
+
+  final _ended = Completer<void>();
+
+  /// Completes once the connection has ended, from either side or a failure.
+  Future<void> get done => _ended.future;
+
   Future<SSHMessageReader> _request(Uint8List payload, int answer) {
+    return _send(payload).then((bytes) {
+      final reader = SSHMessageReader(bytes);
+      final type = _parse(reader.readUint8);
+      if (type == SSHAgentProtocol.failure) {
+        throw SSHAgentError('the agent refused the request');
+      }
+      if (type != answer) throw SSHAgentError('unexpected reply $type');
+      return reader;
+    });
+  }
+
+  Future<Uint8List> _send(Uint8List payload) {
     final reply = _tail.then((_) {
       final closed = _closed;
       if (closed != null) throw closed;
@@ -108,15 +165,7 @@ class SSHAgentClient {
       });
     });
     _tail = reply.then<void>((_) {}, onError: (_) {});
-    return reply.then((bytes) {
-      final reader = SSHMessageReader(bytes);
-      final type = _parse(reader.readUint8);
-      if (type == SSHAgentProtocol.failure) {
-        throw SSHAgentError('the agent refused the request');
-      }
-      if (type != answer) throw SSHAgentError('unexpected reply $type');
-      return reader;
-    });
+    return reply;
   }
 
   void _handleData(Uint8List data) {
@@ -135,6 +184,7 @@ class SSHAgentClient {
 
   void _fail(SSHAgentError error) {
     _closed ??= error;
+    if (!_ended.isCompleted) _ended.complete();
     while (_waiting.isNotEmpty) {
       _waiting.removeFirst().completeError(error);
     }
@@ -166,6 +216,9 @@ class SSHAgentIdentity implements SSHSigner {
   SSHAgentIdentity._(this._agent, this.publicKey, this.comment, this.keyType);
 
   final SSHAgentClient _agent;
+
+  /// The connection that holds this key.
+  SSHAgentClient get agent => _agent;
 
   @override
   final Uint8List publicKey;

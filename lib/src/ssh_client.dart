@@ -8,6 +8,7 @@ import 'package:dartssh2/src/sftp/sftp_client.dart';
 import 'package:dartssh2/src/dynamic_forward.dart';
 import 'package:dartssh2/src/ssh_algorithm.dart';
 import 'package:dartssh2/src/ssh_agent.dart';
+import 'package:dartssh2/src/ssh_agent_client.dart';
 import 'package:dartssh2/src/ssh_channel.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:dartssh2/src/ssh_channel_id.dart';
@@ -166,9 +167,17 @@ class SSHClient {
   /// authentication with public key.
   final List<SSHKeyPair>? identities;
 
-  /// Keys held elsewhere, such as an agent's ([SSHAgentClient.identities]),
-  /// offered after [identities].
+  /// Keys held elsewhere, offered after [identities].
   final List<SSHSigner>? signers;
+
+  /// An ssh-agent whose keys are offered after [signers]: once the first key
+  /// exchange is over, the connection is bound to this session
+  /// (`session-bind@openssh.com`) and only then asked for its keys, as
+  /// OpenSSH asks — so a key added for other hosts only (`ssh-add -h`) is
+  /// neither offered nor signed with here. The agent reads every session one
+  /// connection is bound to as a hop on a path: a connection of its own for
+  /// each client, as each `ssh` opens its own.
+  final SSHAgentClient? identityAgent;
 
   /// Set this field to enable the 'password' authentication method. Return null
   /// to skip to the next available authentication method.
@@ -199,6 +208,14 @@ class SSHClient {
 
   /// Optional handler for SSH agent forwarding requests.
   final SSHAgentHandler? agentHandler;
+
+  /// Forwards an ssh-agent to the sessions opened with `forwardAgent: true`:
+  /// called for each agent channel the server opens, the connection it
+  /// returns bound to this session as forwarded (`session-bind@openssh.com`)
+  /// and closed with the channel — one per channel, as OpenSSH's
+  /// `ForwardAgent` opens them, so a request left waiting on one holds up no
+  /// other. Takes precedence over [agentHandler].
+  final Future<SSHAgentClient> Function()? forwardAgent;
 
   /// The interval at which to send a keep-alive message through the [ping]
   /// method. Set this to null to disable automatic keep-alive messages.
@@ -266,6 +283,7 @@ class SSHClient {
     this.onVerifyHostKey,
     this.identities,
     this.signers,
+    this.identityAgent,
     this.hostbasedIdentities,
     this.hostName,
     this.userNameOnClientHost,
@@ -286,6 +304,7 @@ class SSHClient {
     this.hostCertificateTrust,
     this.onX11Forward,
     this.agentHandler,
+    this.forwardAgent,
     String ident = 'DartSSH_2.0',
   }) : _ident = _validateIdent(ident) {
     _transport = SSHTransport(
@@ -533,13 +552,24 @@ class SSHClient {
     return SSHForwardChannel(channelController.channel);
   }
 
+  void _requestAgentForwarding(SSHChannelController channel) {
+    if (agentHandler != null || forwardAgent != null) {
+      channel.sendAgentForwardingRequest();
+    }
+  }
+
   /// Execute [command] on the remote side. Returns a [SSHChannel] that can be
   /// used to read and write to the remote side.
+  ///
+  /// [forwardAgent] gives the session [agentHandler]'s or [this.forwardAgent]'s
+  /// agent: whoever runs as the user there can sign with it while it is open,
+  /// so only a session that needs it should ask.
   Future<SSHSession> execute(
     String command, {
     SSHPtyConfig? pty,
     SSHX11Config? x11,
     Map<String, String>? environment,
+    bool forwardAgent = false,
   }) async {
     await _authenticated.future;
 
@@ -557,13 +587,7 @@ class SSHClient {
       }
     }
 
-    if (agentHandler != null) {
-      final agentOk = await channelController.sendAgentForwardingRequest();
-      if (!agentOk) {
-        channelController.close();
-        throw SSHChannelRequestError('Failed to request agent forwarding');
-      }
-    }
+    if (forwardAgent) _requestAgentForwarding(channelController);
 
     if (pty != null) {
       final ptyOk = await channelController.sendPtyReq(
@@ -603,10 +627,13 @@ class SSHClient {
 
   /// Start a shell on the remote side. Returns a [SSHSession] that can be
   /// used to read, write and control the pty on the remote side.
+  ///
+  /// [forwardAgent] as for [execute].
   Future<SSHSession> shell({
     SSHPtyConfig? pty = const SSHPtyConfig(),
     SSHX11Config? x11,
     Map<String, String>? environment,
+    bool forwardAgent = false,
   }) async {
     await _authenticated.future;
 
@@ -624,13 +651,7 @@ class SSHClient {
       }
     }
 
-    if (agentHandler != null) {
-      final agentOk = await channelController.sendAgentForwardingRequest();
-      if (!agentOk) {
-        channelController.close();
-        throw SSHChannelRequestError('Failed to request agent forwarding');
-      }
-    }
+    if (forwardAgent) _requestAgentForwarding(channelController);
 
     if (pty != null) {
       final ok = await channelController.sendPtyReq(
@@ -716,6 +737,7 @@ class SSHClient {
     bool stdout = true,
     bool stderr = true,
     Map<String, String>? environment,
+    bool forwardAgent = false,
   }) async {
     final result = await runWithResult(
       command,
@@ -723,6 +745,7 @@ class SSHClient {
       stdout: stdout,
       stderr: stderr,
       environment: environment,
+      forwardAgent: forwardAgent,
     );
 
     return result.output;
@@ -736,11 +759,13 @@ class SSHClient {
     bool stdout = true,
     bool stderr = true,
     Map<String, String>? environment,
+    bool forwardAgent = false,
   }) async {
     final session = await execute(
       command,
       pty: runInPty ? const SSHPtyConfig() : null,
       environment: environment,
+      forwardAgent: forwardAgent,
     );
 
     final outputBuilder = BytesBuilder(copy: false);
@@ -1289,7 +1314,8 @@ class SSHClient {
 
   void _handleAgentChannelOpen(SSH_Message_Channel_Open message) {
     final handler = agentHandler;
-    if (handler == null) {
+    final forward = forwardAgent;
+    if (handler == null && forward == null) {
       final reply = SSH_Message_Channel_Open_Failure(
         recipientChannel: message.senderChannel,
         reasonCode:
@@ -1317,11 +1343,39 @@ class SSHClient {
       remoteMaximumPacketSize: message.maximumPacketSize,
     );
 
-    SSHAgentChannel(
-      channelController.channel,
-      handler,
-      printDebug: printDebug,
-    );
+    if (forward == null) {
+      SSHAgentChannel(
+        channelController.channel,
+        handler!,
+        printDebug: printDebug,
+      );
+      return;
+    }
+    _catch(() async {
+      final SSHAgentClient agent;
+      try {
+        agent = await forward();
+      } catch (e) {
+        printDebug?.call('SSHClient: no agent to forward: $e');
+        channelController.close();
+        return;
+      }
+      final binding = _transport.sessionBinding;
+      try {
+        if (binding != null) await agent.bind(binding, forwarding: true);
+      } catch (e) {
+        printDebug?.call('SSHClient: the agent did not bind: $e');
+      }
+      SSHAgentChannel(
+        channelController.channel,
+        agent,
+        printDebug: printDebug,
+        onDone: () => agent.close(),
+      );
+      // An agent gone (restarted, timed out) answers nothing more: the
+      // channel goes with it, as OpenSSH closes it with its socket.
+      unawaited(agent.done.then((_) => channelController.destroy()));
+    });
   }
 
   /// Finds a remote forward that matches the given host and port.
@@ -1418,7 +1472,26 @@ class SSHClient {
     _sendMessage(SSH_Message_Service_Request('ssh-userauth'));
   }
 
-  void _startAuthentication() {
+  void _startAuthentication() => _catch(() async {
+        await _addAgentKeys();
+        if (!_transport.isClosed) _beginAuthentication();
+      });
+
+  /// [identityAgent]'s keys, asked for once its connection is bound here.
+  Future<void> _addAgentKeys() async {
+    final agent = identityAgent;
+    if (agent == null) return;
+    try {
+      final binding = _transport.sessionBinding;
+      if (binding != null) await agent.bind(binding, forwarding: false);
+      _signersLeft.addAll(await agent.identities());
+    } catch (e) {
+      printDebug?.call('SSHClient: the agent offers no keys: $e');
+      _signError = e;
+    }
+  }
+
+  void _beginAuthentication() {
     printDebug?.call('SSHClient._startAuthentication');
 
     // RFC 4252: Check transport layer security before enabling password auth
@@ -1488,7 +1561,7 @@ class SSHClient {
       return _authenticated.completeError(
         SSHAuthFailError(
           'All authentication methods failed. Tried: $triedMethods'
-          '${signError == null ? '' : '; a key failed to sign: $signError'}',
+          '${signError == null ? '' : '; the last key could not be used: $signError'}',
         ),
         StackTrace.current,
       );
