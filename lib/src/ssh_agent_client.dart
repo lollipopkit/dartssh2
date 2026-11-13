@@ -21,6 +21,10 @@ class SSHAgentClient {
       onError: (Object e) => _fail(SSHAgentError('connection failed: $e')),
       onDone: () => _fail(SSHAgentError('connection closed')),
     );
+    // A write that fails is reported here, apart from the stream.
+    _socket.done.catchError(
+      (Object e) => _fail(SSHAgentError('connection failed: $e')),
+    );
   }
 
   /// How long one answer may take. An agent may be waiting on the user (a

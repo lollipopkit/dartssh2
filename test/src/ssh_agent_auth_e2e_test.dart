@@ -8,8 +8,8 @@ import 'package:test/test.dart';
 /// holds.
 ///
 /// Opt-in: set `DARTSSH2_E2E_HOST`, `DARTSSH2_E2E_USER` (`DARTSSH2_E2E_PORT`
-/// for anything but 22) and `DARTSSH2_E2E_AGENT_SOCK`, an agent holding at
-/// least one key the account authorises. The account must not authorise the
+/// for anything but 22) and `DARTSSH2_E2E_AGENT_SOCK`, an agent of its own
+/// whose every key the account authorises. The account must not authorise the
 /// fixture key below. `DARTSSH2_E2E_KEY_FILE`, an unencrypted private key
 /// the account authorises, also runs an in-app key through the same probe.
 void main() {
