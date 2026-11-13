@@ -103,7 +103,9 @@ void main() {
 
     test('a key the server turns down is never signed with', () async {
       final turnedDown = _Counting(unauthorised.signer);
-      final accepted = (await agent.identities()).map(_Counting.new).toList();
+      // Offered unbound: only a key with no destination constraint signs.
+      final accepted =
+          (await agent.identities()).where(free).map(_Counting.new).toList();
 
       await authenticate(signers: [turnedDown, ...accepted]);
 
@@ -119,13 +121,13 @@ void main() {
     }, skip: keyFile == null ? 'no DARTSSH2_E2E_KEY_FILE' : null);
 
     test('a signer that fails passes to the next key', () async {
-      final key = (await agent.identities()).first;
+      final key = (await agent.identities()).firstWhere(free);
 
       await authenticate(signers: [_Failing(key), key]);
     });
 
     test('a key that fails to sign is named when nothing else works', () async {
-      final key = (await agent.identities()).first;
+      final key = (await agent.identities()).firstWhere(free);
 
       await expectLater(
         authenticate(signers: [_Failing(key)]),

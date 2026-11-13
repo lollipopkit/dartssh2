@@ -38,7 +38,85 @@ void main() {
       await client.done;
     });
   });
+
+  group('agent channels', () {
+    test('are taken only while a session that asked for one is open', () async {
+      var connected = 0;
+      final client = SSHClient(
+        _FakeSSHSocket(),
+        username: 'demo',
+        keepAliveInterval: null,
+        forwardAgent: () async {
+          connected++;
+          throw StateError('no agent here');
+        },
+      );
+      client.handlePacket(SSH_Message_Userauth_Success().encode());
+
+      Future<void> settle() async {
+        for (var i = 0; i < 5; i++) {
+          await Future<void>.delayed(Duration.zero);
+        }
+      }
+
+      var nextServerChannel = 100;
+      Future<void> serverOpensAgentChannel() async {
+        client.handlePacket(
+          SSH_Message_Channel_Open(
+            channelType: 'auth-agent@openssh.com',
+            senderChannel: nextServerChannel++,
+            initialWindowSize: 1 << 16,
+            maximumPacketSize: 1 << 15,
+          ).encode(),
+        );
+        await settle();
+      }
+
+      // No session asked: a server opening one anyway gets nothing.
+      await serverOpensAgentChannel();
+      expect(connected, 0);
+
+      // A session without it changes nothing.
+      final plain = client.execute('true');
+      await settle();
+      client.handlePacket(_confirm(local: 0, remote: 7));
+      await settle();
+      client.handlePacket(
+          SSH_Message_Channel_Success(recipientChannel: 0).encode());
+      await plain;
+      await serverOpensAgentChannel();
+      expect(connected, 0);
+
+      final asking = client.execute('true', forwardAgent: true);
+      await settle();
+      client.handlePacket(_confirm(local: 1, remote: 8));
+      await settle();
+      client.handlePacket(
+          SSH_Message_Channel_Success(recipientChannel: 1).encode());
+      await asking;
+      await serverOpensAgentChannel();
+      expect(connected, 1);
+
+      // That session over, the agent is no longer the server's to open.
+      client.handlePacket(
+          SSH_Message_Channel_Close(recipientChannel: 1).encode());
+      await settle();
+      await serverOpensAgentChannel();
+      expect(connected, 1);
+
+      client.close();
+    });
+  });
 }
+
+Uint8List _confirm({required int local, required int remote}) =>
+    SSH_Message_Channel_Confirmation(
+      recipientChannel: local,
+      senderChannel: remote,
+      initialWindowSize: 1 << 16,
+      maximumPacketSize: 1 << 15,
+      data: Uint8List(0),
+    ).encode();
 
 class _FakeSSHSocket implements SSHSocket {
   final _inputController = StreamController<Uint8List>();

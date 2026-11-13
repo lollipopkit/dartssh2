@@ -552,10 +552,16 @@ class SSHClient {
     return SSHForwardChannel(channelController.channel);
   }
 
+  /// Sessions that asked for the agent and are still open: an agent channel
+  /// the server opens with none of them is one nothing asked for, and is
+  /// refused rather than handed the agent.
+  var _agentSessions = 0;
+
   void _requestAgentForwarding(SSHChannelController channel) {
-    if (agentHandler != null || forwardAgent != null) {
-      channel.sendAgentForwardingRequest();
-    }
+    if (agentHandler == null && forwardAgent == null) return;
+    _agentSessions++;
+    channel.channel.done.whenComplete(() => _agentSessions--).ignore();
+    channel.sendAgentForwardingRequest();
   }
 
   /// Execute [command] on the remote side. Returns a [SSHChannel] that can be
@@ -1315,12 +1321,12 @@ class SSHClient {
   void _handleAgentChannelOpen(SSH_Message_Channel_Open message) {
     final handler = agentHandler;
     final forward = forwardAgent;
-    if (handler == null && forward == null) {
+    if ((handler == null && forward == null) || _agentSessions == 0) {
       final reply = SSH_Message_Channel_Open_Failure(
         recipientChannel: message.senderChannel,
         reasonCode:
             SSH_Message_Channel_Open_Failure.codeAdministrativelyProhibited,
-        description: 'agent forwarding not enabled',
+        description: 'agent forwarding not requested',
       );
       _sendMessage(reply);
       return;
@@ -1366,15 +1372,24 @@ class SSHClient {
       } catch (e) {
         printDebug?.call('SSHClient: the agent did not bind: $e');
       }
+      var finished = false;
       SSHAgentChannel(
         channelController.channel,
         agent,
         printDebug: printDebug,
-        onDone: () => agent.close(),
+        onDone: () {
+          finished = true;
+          agent.close();
+        },
       );
       // An agent gone (restarted, timed out) answers nothing more: the
-      // channel goes with it, as OpenSSH closes it with its socket.
-      unawaited(agent.done.then((_) => channelController.destroy()));
+      // channel goes with it, as OpenSSH closes it with its socket. Not once
+      // the channel has finished, whose last answers may still be on their way.
+      unawaited(
+        agent.done.then((_) {
+          if (!finished) channelController.destroy();
+        }),
+      );
     });
   }
 
