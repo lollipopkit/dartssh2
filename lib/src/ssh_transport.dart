@@ -179,6 +179,15 @@ class SSHTransport {
   /// cipher IV, cipher key and MAC key.
   Uint8List? _exchangeHash;
 
+  /// What the first key exchange proved: the host key and its signature over
+  /// [_sessionId]. Null until it is over.
+  SSHSessionBinding? _binding;
+
+  /// What an ssh-agent is told to bind a connection to this session with
+  /// (`session-bind@openssh.com`), so a key added for some hosts only is
+  /// refused for others. Null until the first key exchange is over.
+  SSHSessionBinding? get sessionBinding => _binding;
+
   /// Whether the hostkey of the server has been verified. This is always false
   /// when the transport is acting as a server.
   var _hostkeyVerified = false;
@@ -1742,6 +1751,11 @@ class SSHTransport {
     }
 
     _exchangeHash = exchangeHash;
+    _binding ??= SSHSessionBinding(
+      hostKey: hostkey,
+      sessionId: exchangeHash,
+      signature: hostSignature,
+    );
     _sessionId ??= exchangeHash;
     _sharedSecret = sharedSecret;
 
@@ -1948,4 +1962,19 @@ class SSHTransport {
     return (messageId >= 20 && messageId <= 49) ||
         (messageId >= 1 && messageId <= 4);
   }
+}
+
+/// The first key exchange of a session, as `session-bind@openssh.com` carries
+/// it: the host key as the server sent it, the session identifier, and the
+/// host's signature over it.
+class SSHSessionBinding {
+  const SSHSessionBinding({
+    required this.hostKey,
+    required this.sessionId,
+    required this.signature,
+  });
+
+  final Uint8List hostKey;
+  final Uint8List sessionId;
+  final Uint8List signature;
 }

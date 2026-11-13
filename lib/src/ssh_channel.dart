@@ -156,15 +156,17 @@ class SSHChannelController {
     return await _requestReplyQueue.next;
   }
 
-  Future<bool> sendAgentForwardingRequest() async {
+  /// Asks for the agent to be forwarded to this session, as OpenSSH asks:
+  /// with no reply wanted. A server that refuses (`AllowAgentForwarding no`)
+  /// just never opens an agent channel, and the session goes on.
+  void sendAgentForwardingRequest() {
     sendMessage(
       SSH_Message_Channel_Request(
         recipientChannel: remoteId,
         requestType: SSHChannelRequestType.authAgent,
-        wantReply: true,
+        wantReply: false,
       ),
     );
-    return await _requestReplyQueue.next;
   }
 
   Future<bool> sendSubsystem(String subsystem) async {

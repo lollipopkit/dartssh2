@@ -173,6 +173,8 @@ void main() {
 
     await expectLater(waiting, throwsA(isA<SSHAgentError>()));
     await expectLater(agent.identities(), throwsA(isA<SSHAgentError>()));
+    // What a forwarded channel waits on to close with it.
+    await agent.done.timeout(const Duration(seconds: 1));
   });
 
   test('a frame longer than the protocol allows ends the connection', () async {
@@ -249,5 +251,70 @@ void main() {
     final keys = await agent.identities();
 
     expect(keys.single.publicKey, blob);
+  });
+
+  group('bound to a session', () {
+    final binding = SSHSessionBinding(
+      hostKey: Uint8List.fromList([1, 2, 3]),
+      sessionId: Uint8List.fromList([4, 5, 6, 7]),
+      signature: Uint8List.fromList([8, 9, 10, 11, 12]),
+    );
+
+    test('says session-bind@openssh.com', () async {
+      final requests = <Uint8List>[];
+      final agent = SSHAgentClient(_Agent((request) async {
+        requests.add(request);
+        return Uint8List.fromList([SSHAgentProtocol.success]);
+      }).socket);
+
+      expect(await agent.bind(binding, forwarding: true), isTrue);
+
+      expect(requests, hasLength(1));
+      final r = SSHMessageReader(requests.single);
+      expect(r.readUint8(), SSHAgentProtocol.extension);
+      expect(r.readUtf8(), 'session-bind@openssh.com');
+      expect(r.readString(), binding.hostKey);
+      expect(r.readString(), binding.sessionId);
+      expect(r.readString(), binding.signature);
+      expect(r.readBool(), isTrue);
+      expect(r.isDone, isTrue);
+    });
+
+    test('an agent that does not know it is still used', () async {
+      final agent = clientOf(SSHKeyPairAgent([ed25519]));
+
+      expect(await agent.bind(binding, forwarding: false), isFalse);
+      expect(await agent.identities(), hasLength(1));
+    });
+  });
+
+  group('forwarded', () {
+    test('a request goes through as it came, and the reply as it is', () async {
+      final real = SSHKeyPairAgent([ed25519], comment: 'me@box');
+      final agent = clientOf(real);
+      final request = Uint8List.fromList([SSHAgentProtocol.requestIdentities]);
+
+      expect(
+        await agent.handleRequest(request),
+        await real.handleRequest(request),
+      );
+    });
+
+    test('a refusal is the agent\'s answer to pass back, not an error',
+        () async {
+      final agent = clientOf(SSHKeyPairAgent([ed25519]));
+
+      // A key it does not hold.
+      final reply = await agent.handleRequest(
+        (SSHMessageWriter()
+              ..writeUint8(SSHAgentProtocol.signRequest)
+              ..writeString(rsa.toPublicKey().encode())
+              ..writeString(Uint8List(1))
+              ..writeUint32(0))
+            .takeBytes(),
+      );
+
+      expect(reply, [SSHAgentProtocol.failure]);
+    });
   });
 }

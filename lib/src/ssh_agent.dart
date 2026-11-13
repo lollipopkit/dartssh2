@@ -167,7 +167,12 @@ class SSHKeyPairAgent implements SSHAgentHandler {
 class SSHAgentChannel {
   static const maxFrameSize = SSHAgentFrames.maxFrameSize;
 
-  SSHAgentChannel(this._channel, this._handler, {this.printDebug}) {
+  SSHAgentChannel(
+    this._channel,
+    this._handler, {
+    this.printDebug,
+    this.onDone,
+  }) {
     _subscription = _channel.stream.listen(
       _handleData,
       onDone: _handleDone,
@@ -179,13 +184,31 @@ class SSHAgentChannel {
   final SSHAgentHandler _handler;
   final SSHPrintHandler? printDebug;
 
+  /// Called once the channel has ended, either way, and every request it
+  /// carried has been answered.
+  final void Function()? onDone;
+
   StreamSubscription<SSHChannelData>? _subscription;
   final _frames = SSHAgentFrames();
   final _requests = <Uint8List>[];
   bool _processing = false;
 
+  var _ended = false;
+  var _finished = false;
+
+  /// The far end stops at EOF, and a request it sent before still deserves
+  /// its answer: [onDone] waits for the queue.
   void _handleDone() {
+    if (_ended) return;
+    _ended = true;
     _subscription?.cancel();
+    if (!_processing) _finish();
+  }
+
+  void _finish() {
+    if (_finished) return;
+    _finished = true;
+    onDone?.call();
   }
 
   void _handleData(SSHChannelData data) {
@@ -195,6 +218,7 @@ class SSHAgentChannel {
       printDebug?.call('SSH agent: ${e.message}, closing channel');
       _requests.clear();
       _channel.destroy();
+      _handleDone();
       return;
     }
     _drainRequests();
@@ -203,7 +227,10 @@ class SSHAgentChannel {
   void _drainRequests() {
     if (_processing) return;
     _processing = true;
-    _processQueue().whenComplete(() => _processing = false);
+    _processQueue().whenComplete(() {
+      _processing = false;
+      if (_ended) _finish();
+    });
   }
 
   Future<void> _processQueue() async {
@@ -266,6 +293,9 @@ class SSHAgentFrames {
 
 abstract class SSHAgentProtocol {
   static const int failure = 5;
+  static const int success = 6;
+  static const int extension = 27;
+  static const int extensionFailure = 28;
   static const int requestIdentities = 11;
   static const int identitiesAnswer = 12;
   static const int signRequest = 13;

@@ -22,6 +22,19 @@ class _RecordingAgentHandler implements SSHAgentHandler {
   }
 }
 
+class _GatedAgentHandler implements SSHAgentHandler {
+  _GatedAgentHandler(this._gate, this._response);
+
+  final Future<void> _gate;
+  final Uint8List _response;
+
+  @override
+  Future<Uint8List> handleRequest(Uint8List request) async {
+    await _gate;
+    return _response;
+  }
+}
+
 void main() {
   final rsaPrivate = fixture('ssh-rsa/id_rsa');
 
@@ -236,6 +249,52 @@ void main() {
       expect(responseReader.readBytes(2), Uint8List.fromList([7, 8]));
     }
 
+    controller.destroy();
+  });
+
+  test('SSHAgentChannel answers a request sent before EOF, then is done',
+      () async {
+    final gate = Completer<void>();
+    final answered = <SSH_Message_Channel_Data>[];
+    var done = false;
+    final handler = _GatedAgentHandler(gate.future, Uint8List.fromList([7]));
+
+    final controller = SSHChannelController(
+      localId: 1,
+      localMaximumPacketSize: 1024,
+      localInitialWindowSize: 1024,
+      remoteId: 2,
+      remoteMaximumPacketSize: 1024,
+      remoteInitialWindowSize: 1024,
+      sendMessage: (message) {
+        if (message is SSH_Message_Channel_Data) answered.add(message);
+      },
+    );
+    SSHAgentChannel(controller.channel, handler, onDone: () => done = true);
+
+    final frame = (SSHMessageWriter()
+          ..writeUint32(1)
+          ..writeUint8(SSHAgentProtocol.requestIdentities))
+        .takeBytes();
+    controller.handleMessage(
+      SSH_Message_Channel_Data(
+        recipientChannel: controller.localId,
+        data: frame,
+      ),
+    );
+    // A client that writes its request and half-closes, as `ssh-add` may.
+    controller.handleMessage(
+      SSH_Message_Channel_EOF(recipientChannel: controller.localId),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(done, isFalse);
+
+    gate.complete();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(answered, hasLength(1));
+    expect(done, isTrue);
     controller.destroy();
   });
 

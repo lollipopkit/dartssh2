@@ -184,6 +184,7 @@ class _TestSSHClient extends SSHClient {
     SSHPtyConfig? pty,
     SSHX11Config? x11,
     Map<String, String>? environment,
+    bool forwardAgent = false,
   }) {
     return _executeImpl();
   }
