@@ -14,6 +14,13 @@ Future<SSHSocket> connectNativeSocket(
   return _SSHNativeSocket._(socket);
 }
 
+Future<SSHSocket> connectUnixSocket(String path, {Duration? timeout}) async {
+  final address = InternetAddress(path, type: InternetAddressType.unix);
+  return _SSHNativeSocket._(
+    await Socket.connect(address, 0, timeout: timeout),
+  );
+}
+
 class _SSHNativeSocket implements SSHSocket {
   final Socket _socket;
 
@@ -45,7 +52,10 @@ class _SSHNativeSocket implements SSHSocket {
 
   @override
   String toString() {
-    final address = '${_socket.remoteAddress.host}:${_socket.remotePort}';
+    final remote = _socket.remoteAddress;
+    final address = remote.type == InternetAddressType.unix
+        ? remote.address
+        : '${remote.host}:${_socket.remotePort}';
     return '_SSHNativeSocket($address)';
   }
 }

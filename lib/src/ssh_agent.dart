@@ -4,9 +4,11 @@ import 'dart:typed_data';
 import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
 import 'package:dartssh2/src/ssh_hostkey.dart';
 import 'package:dartssh2/src/ssh_channel.dart';
+import 'package:dartssh2/src/ssh_errors.dart';
 import 'package:dartssh2/src/ssh_key_pair.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:dartssh2/src/ssh_transport.dart';
+import 'package:meta/meta.dart';
 import 'package:pointycastle/api.dart' hide Signature;
 import 'package:pointycastle/asymmetric/api.dart' as asymmetric;
 import 'package:pointycastle/digests/sha1.dart';
@@ -163,7 +165,7 @@ class SSHKeyPairAgent implements SSHAgentHandler {
 }
 
 class SSHAgentChannel {
-  static const maxFrameSize = 256 * 1024;
+  static const maxFrameSize = SSHAgentFrames.maxFrameSize;
 
   SSHAgentChannel(this._channel, this._handler, {this.printDebug}) {
     _subscription = _channel.stream.listen(
@@ -178,7 +180,8 @@ class SSHAgentChannel {
   final SSHPrintHandler? printDebug;
 
   StreamSubscription<SSHChannelData>? _subscription;
-  Uint8List _buffer = Uint8List(0);
+  final _frames = SSHAgentFrames();
+  final _requests = <Uint8List>[];
   bool _processing = false;
 
   void _handleDone() {
@@ -186,7 +189,14 @@ class SSHAgentChannel {
   }
 
   void _handleData(SSHChannelData data) {
-    _buffer = _appendBytes(_buffer, data.bytes);
+    try {
+      _requests.addAll(_frames.add(data.bytes));
+    } on SSHAgentError catch (e) {
+      printDebug?.call('SSH agent: ${e.message}, closing channel');
+      _requests.clear();
+      _channel.destroy();
+      return;
+    }
     _drainRequests();
   }
 
@@ -197,18 +207,8 @@ class SSHAgentChannel {
   }
 
   Future<void> _processQueue() async {
-    while (_buffer.length >= 4) {
-      final length = ByteData.sublistView(_buffer, 0, 4).getUint32(0);
-      if (length == 0 || length > maxFrameSize) {
-        printDebug
-            ?.call('SSH agent: invalid frame length $length, closing channel');
-        _channel.destroy();
-        _buffer = Uint8List(0);
-        return;
-      }
-      if (_buffer.length < 4 + length) return;
-      final payload = _buffer.sublist(4, 4 + length);
-      _buffer = _buffer.sublist(4 + length);
+    while (_requests.isNotEmpty) {
+      final payload = _requests.removeAt(0);
       Uint8List response;
       try {
         response = await _handler.handleRequest(payload);
@@ -216,7 +216,7 @@ class SSHAgentChannel {
         printDebug?.call('SSH agent handler error: $error');
         response = _failureResponse();
       }
-      _sendResponse(response);
+      _channel.addData(SSHAgentFrames.encode(response));
     }
   }
 
@@ -225,22 +225,43 @@ class SSHAgentChannel {
     writer.writeUint8(SSHAgentProtocol.failure);
     return writer.takeBytes();
   }
+}
 
-  void _sendResponse(Uint8List payload) {
-    final writer = SSHMessageWriter();
-    writer.writeUint32(payload.length);
-    writer.writeBytes(payload);
-    _channel.addData(writer.takeBytes());
+/// The framing of an agent connection, both ends: a uint32 length, then that
+/// many bytes.
+@internal
+class SSHAgentFrames {
+  static const maxFrameSize = 256 * 1024;
+
+  var _buffer = Uint8List(0);
+
+  /// The frames [bytes] completes, in order. Throws [SSHAgentError] for a
+  /// length the protocol does not allow, after which the connection is lost.
+  List<Uint8List> add(Uint8List bytes) {
+    _buffer = _buffer.isEmpty
+        ? bytes
+        : (BytesBuilder(copy: false)
+              ..add(_buffer)
+              ..add(bytes))
+            .takeBytes();
+    final frames = <Uint8List>[];
+    while (_buffer.length >= 4) {
+      final length = ByteData.sublistView(_buffer, 0, 4).getUint32(0);
+      if (length == 0 || length > maxFrameSize) {
+        _buffer = Uint8List(0);
+        throw SSHAgentError('invalid frame length $length');
+      }
+      if (_buffer.length < 4 + length) break;
+      frames.add(Uint8List.sublistView(_buffer, 4, 4 + length));
+      _buffer = Uint8List.sublistView(_buffer, 4 + length);
+    }
+    return frames;
   }
 
-  Uint8List _appendBytes(Uint8List a, Uint8List b) {
-    if (a.isEmpty) return b;
-    if (b.isEmpty) return a;
-    final combined = Uint8List(a.length + b.length);
-    combined.setAll(0, a);
-    combined.setAll(a.length, b);
-    return combined;
-  }
+  static Uint8List encode(Uint8List payload) => (SSHMessageWriter()
+        ..writeUint32(payload.length)
+        ..writeBytes(payload))
+      .takeBytes();
 }
 
 abstract class SSHAgentProtocol {
