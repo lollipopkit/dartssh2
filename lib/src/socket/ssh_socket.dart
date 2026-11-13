@@ -17,6 +17,15 @@ abstract class SSHSocket {
     return await connectNativeSocket(host, port, timeout: timeout);
   }
 
+  /// Connects to a Unix domain socket at [path], such as the one an ssh-agent
+  /// listens on (`$SSH_AUTH_SOCK`).
+  ///
+  /// Throws [UnsupportedError] on web; where the platform has no Unix sockets,
+  /// whatever `dart:io` throws for one (a [SocketException] or an
+  /// [ArgumentError]).
+  static Future<SSHSocket> connectUnix(String path, {Duration? timeout}) =>
+      connectUnixSocket(path, timeout: timeout);
+
   Stream<Uint8List> get stream;
 
   StreamSink<List<int>> get sink;

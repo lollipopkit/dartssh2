@@ -149,3 +149,12 @@ class SSHSocketError implements SSHError {
     return 'SSHSocketError($error)';
   }
 }
+
+/// An ssh-agent that could not be reached, refused a request or answered
+/// something that is not the protocol.
+class SSHAgentError with SSHMessageError implements SSHError {
+  @override
+  final String message;
+
+  SSHAgentError(this.message);
+}

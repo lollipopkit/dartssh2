@@ -450,6 +450,43 @@ class SSH_Message_Userauth_Passwd_ChangeReq extends SSHMessage {
   }
 }
 
+/// The server would accept the key a `publickey` request offered without a
+/// signature (RFC 4252 §7).
+class SSH_Message_Userauth_Pk_Ok extends SSHMessage {
+  /// 60
+  static const messageId = SSHUserAuthMessageNumbers.SSH_MSG_USERAUTH_PK_OK;
+
+  final String publicKeyAlgorithm;
+  final Uint8List publicKey;
+
+  SSH_Message_Userauth_Pk_Ok({
+    required this.publicKeyAlgorithm,
+    required this.publicKey,
+  });
+
+  factory SSH_Message_Userauth_Pk_Ok.decode(Uint8List bytes) {
+    final reader = SSHMessageReader(bytes);
+    reader.skip(1);
+    return SSH_Message_Userauth_Pk_Ok(
+      publicKeyAlgorithm: reader.readUtf8(),
+      publicKey: reader.readString(),
+    );
+  }
+
+  @override
+  Uint8List encode() {
+    final writer = SSHMessageWriter();
+    writer.writeUint8(messageId);
+    writer.writeUtf8(publicKeyAlgorithm);
+    writer.writeString(publicKey);
+    return writer.takeBytes();
+  }
+
+  @override
+  String toString() =>
+      'SSH_Message_Userauth_Pk_Ok(publicKeyAlgorithm: $publicKeyAlgorithm)';
+}
+
 class SSH_Message_Userauth_InfoRequest implements SSHMessage {
   /// 60
   static const messageId =

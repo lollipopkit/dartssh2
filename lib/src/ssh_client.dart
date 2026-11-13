@@ -17,10 +17,12 @@ import 'package:dartssh2/src/ssh_hostkey.dart';
 import 'package:dartssh2/src/ssh_keepalive.dart';
 import 'package:dartssh2/src/ssh_key_pair.dart';
 import 'package:dartssh2/src/ssh_session.dart';
+import 'package:dartssh2/src/ssh_signer.dart';
 import 'package:dartssh2/src/ssh_transport.dart';
 import 'package:dartssh2/src/ssh_userauth.dart';
 import 'package:dartssh2/src/socket/ssh_socket.dart';
 import 'package:dartssh2/src/utils/async_queue.dart';
+import 'package:dartssh2/src/utils/list.dart';
 import 'package:meta/meta.dart';
 
 part 'ssh_client_testing.dart';
@@ -164,6 +166,10 @@ class SSHClient {
   /// authentication with public key.
   final List<SSHKeyPair>? identities;
 
+  /// Keys held elsewhere, such as an agent's ([SSHAgentClient.identities]),
+  /// offered after [identities].
+  final List<SSHSigner>? signers;
+
   /// Set this field to enable the 'password' authentication method. Return null
   /// to skip to the next available authentication method.
   final SSHPasswordRequestHandler? onPasswordRequest;
@@ -259,6 +265,7 @@ class SSHClient {
     this.algorithms = const SSHAlgorithms(),
     this.onVerifyHostKey,
     this.identities,
+    this.signers,
     this.hostbasedIdentities,
     this.hostName,
     this.userNameOnClientHost,
@@ -306,9 +313,9 @@ class SSHClient {
       (error, stackTrace) => _transport.closeWithError(error, stackTrace),
     );
 
-    if (identities != null) {
-      _keyPairsLeft.addAll(identities!);
-    }
+    _signersLeft
+      ..addAll([...?identities?.map((key) => key.signer)])
+      ..addAll([...?signers]);
 
     if (hostbasedIdentities != null) {
       _hostbasedKeyPairsLeft.addAll(hostbasedIdentities!);
@@ -371,7 +378,14 @@ class SSHClient {
 
   final _authMethodsLeft = Queue<SSHAuthMethod>();
 
-  final _keyPairsLeft = Queue<SSHKeyPair>();
+  final _signersLeft = Queue<SSHSigner>();
+
+  /// The key last offered without a signature, until the server answers.
+  SSHSigner? _offered;
+
+  /// Why the last key the server would have taken was not signed with, for
+  /// the error if nothing else works.
+  Object? _signError;
 
   final _remoteForwards = <SSHRemoteForward>{};
 
@@ -1011,6 +1025,7 @@ class SSHClient {
     final message = SSH_Message_Userauth_Failure.decode(payload);
     printTrace?.call('<- $socket: $message');
     printDebug?.call('SSHClient._handleUserauthFailure');
+    _offered = null;
 
     // RFC 4252: Process the list of methods that can continue
     final availableMethods = message.methodsLeft;
@@ -1031,6 +1046,8 @@ class SSHClient {
         return _catch(() => _handleUserauthPasswordChangeRequest(payload));
       case SSHAuthMethod.keyboardInteractive:
         return _catch(() => _handleUserauthInfoRequest(payload));
+      case SSHAuthMethod.publicKey:
+        return _catch(() => _handleUserauthPkOk(payload));
       default:
         printDebug?.call('unknown auth method: $_currentAuthMethod');
     }
@@ -1414,7 +1431,7 @@ class SSHClient {
     // RFC 4252: First try "none" method to get list of supported methods
     _authMethodsLeft.add(SSHAuthMethod.none);
 
-    if (identities != null && identities!.isNotEmpty) {
+    if (_signersLeft.isNotEmpty) {
       _authMethodsLeft.add(SSHAuthMethod.publicKey);
     }
 
@@ -1454,7 +1471,7 @@ class SSHClient {
     }
 
     if (_currentAuthMethod == SSHAuthMethod.publicKey) {
-      if (_keyPairsLeft.isNotEmpty) {
+      if (_signersLeft.isNotEmpty) {
         return _authWithNextPublicKey();
       }
     }
@@ -1467,9 +1484,12 @@ class SSHClient {
             .map((m) => m.name)
       ].join(', ');
 
+      final signError = _signError;
       return _authenticated.completeError(
         SSHAuthFailError(
-            'All authentication methods failed. Tried: $triedMethods'),
+          'All authentication methods failed. Tried: $triedMethods'
+          '${signError == null ? '' : '; a key failed to sign: $signError'}',
+        ),
         StackTrace.current,
       );
     }
@@ -1526,32 +1546,68 @@ class SSHClient {
     );
   }
 
+  /// Offers the next key without a signature (RFC 4252 §7); it is signed in
+  /// [_handleUserauthPkOk], once the server says it would take it. A signer
+  /// that prompts the user then prompts once, for the key that works, rather
+  /// than for each key the server turns down.
   void _authWithNextPublicKey() {
     printDebug?.call('SSHClient._authWithPublicKey');
 
-    if (_keyPairsLeft.isEmpty) {
+    if (_signersLeft.isEmpty) {
       _tryNextAuthMethod();
       return;
     }
 
     _authAttempts++;
 
-    final keyPair = _keyPairsLeft.removeFirst();
+    final signer = _offered = _signersLeft.removeFirst();
+    _sendMessage(
+      SSH_Message_Userauth_Request.publicKey(
+        username: username,
+        publicKeyAlgorithm: signer.type,
+        publicKey: signer.publicKey,
+        signature: null,
+      ),
+    );
+  }
+
+  Future<void> _handleUserauthPkOk(Uint8List payload) async {
+    final message = SSH_Message_Userauth_Pk_Ok.decode(payload);
+    printTrace?.call('<- $socket: $message');
+
+    final signer = _offered;
+    _offered = null;
+    // The algorithm is not compared: a server may echo the blob's own name
+    // (`ssh-rsa`) for the `rsa-sha2-256` offered.
+    if (signer == null || !message.publicKey.equals(signer.publicKey)) {
+      printDebug?.call('SSHClient: PK_OK for a key not offered');
+      return _tryNextAuthMethod();
+    }
 
     final challenge = _transport.composeChallenge(
       username: username,
       service: 'ssh-connection',
-      publicKeyAlgorithm: keyPair.type,
-      publicKey: keyPair.toPublicKey().encode(),
+      publicKeyAlgorithm: signer.type,
+      publicKey: signer.publicKey,
     );
+
+    final Uint8List signature;
+    try {
+      signature = await signer.sign(challenge);
+    } catch (e) {
+      printDebug?.call('SSHClient: signing with ${signer.type} failed: $e');
+      _signError = e;
+      if (!_transport.isClosed) _tryNextAuthMethod();
+      return;
+    }
+    if (_transport.isClosed) return;
 
     _sendMessage(
       SSH_Message_Userauth_Request.publicKey(
         username: username,
-        publicKeyAlgorithm: keyPair.type,
-        publicKey: keyPair.toPublicKey().encode(),
-        signature: keyPair.sign(challenge).encode(),
-        // signature: null,
+        publicKeyAlgorithm: signer.type,
+        publicKey: signer.publicKey,
+        signature: signature,
       ),
     );
   }
@@ -1622,7 +1678,7 @@ class SSHClient {
     // RFC 4252: Server tells us which methods may productively continue
     final supportedMethods = continuableAuthMethods(
       serverMethods: serverMethods,
-      hasUntriedKeys: _keyPairsLeft.isNotEmpty,
+      hasUntriedKeys: _signersLeft.isNotEmpty,
       hasUntriedHostbasedKeys: _hostbasedKeyPairsLeft.isNotEmpty,
       canSupplyPassword: onPasswordRequest != null,
       canAnswerUserInfo: onUserInfoRequest != null,

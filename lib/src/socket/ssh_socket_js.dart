@@ -12,3 +12,8 @@ Future<SSHSocket> connectNativeSocket(
     '(for example, a WebSocket tunnel/proxy to an SSH endpoint).',
   );
 }
+
+Future<SSHSocket> connectUnixSocket(String path, {Duration? timeout}) async {
+  throw UnsupportedError(
+      'SSHSocket.connectUnix($path) is not supported on web.');
+}
