@@ -8,8 +8,10 @@ import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
 import 'package:dartssh2/src/message/base.dart';
 import 'package:dartssh2/src/ssh_client.dart';
 import 'package:dartssh2/src/ssh_transport.dart';
+import 'package:pinenacl/ed25519.dart' as nacl;
 import 'package:test/test.dart';
 
+import 'helpers/test_kex_server.dart';
 import '../test_utils.dart';
 
 const _legacyAlgorithms = SSHAlgorithms(
@@ -258,8 +260,9 @@ void main() {
       harness.close();
     });
 
-    test('tries all modern keys (identities + agent) before any SHA-1 fallback',
-        () async {
+    test(
+        'skips SHA-1 fallback on modern RFC 8308 server advertising '
+        'rsa-sha2-256 even across identities + agent', () async {
       final agent = _agentClient(SSHKeyPairAgent([ed25519]));
       addTearDown(agent.close);
 
@@ -267,13 +270,90 @@ void main() {
         identities: [rsaPem],
         identityAgent: agent,
         algorithms: _legacyAlgorithms,
-        acceptedPublicKeyAlgorithms: const {'ssh-ed25519', 'ssh-rsa'},
+        serverSigAlgs: const {'rsa-sha2-256', 'ssh-ed25519', 'ssh-rsa'},
+        acceptedPublicKeyAlgorithms: const {'ssh-ed25519', 'rsa-sha2-256'},
         authorizedPublicKeys: [ed25519.toPublicKey().encode()],
       );
 
       await harness.run();
       expect(harness.probedAlgorithms, ['rsa-sha2-256', 'ssh-ed25519']);
       expect(harness.signedAlgorithms, ['ssh-ed25519']);
+      harness.close();
+    });
+
+    test(
+        'reaches legacy ssh-rsa fallback before MaxAuthTries=6 with six RSA '
+        'keys on a pre-RFC-8308 server', () async {
+      final harness = _AuthHarness(
+        identities: [
+          rsaPem,
+          rsaOther,
+          rsaOther,
+          rsaOther,
+          rsaOther,
+          rsaOther,
+        ],
+        algorithms: _legacyAlgorithms,
+        acceptedPublicKeyAlgorithms: const {'ssh-rsa'},
+        authorizedPublicKeys: [rsaPem.toPublicKey().encode()],
+        maxAuthFailures: 6,
+      );
+
+      await harness.run();
+      expect(harness.probedAlgorithms, ['rsa-sha2-256', 'ssh-rsa']);
+      expect(harness.signedAlgorithms, ['ssh-rsa']);
+      harness.close();
+    });
+
+    test(
+        'goes straight to ssh-rsa when server-sig-algs advertises only ssh-rsa '
+        'and legacy is enabled', () async {
+      final harness = _AuthHarness(
+        identities: [rsaPem],
+        algorithms: _legacyAlgorithms,
+        serverSigAlgs: const {'ssh-rsa'},
+        acceptedPublicKeyAlgorithms: const {'ssh-rsa'},
+        authorizedPublicKeys: [rsaPem.toPublicKey().encode()],
+      );
+
+      await harness.run();
+      expect(harness.probedAlgorithms, ['ssh-rsa']);
+      expect(harness.signedAlgorithms, ['ssh-rsa']);
+      harness.close();
+    });
+
+    test('matches RSA cert against plain rsa-sha2-256 in server-sig-algs',
+        () async {
+      final rsaPub = rsaPem.toPublicKey() as SSHRsaPublicKey;
+      final certBlob = _syntheticRsaCertBlob(rsaPub.e, rsaPub.n);
+      final agent = _agentClient(
+        _SyntheticAgent(
+          identities: [(blob: certBlob, comment: 'rsa-cert')],
+          onSign: (blob, data, flags) =>
+              rsaPem.signWith(data, SSHRsaSignatureType.sha256).encode(),
+        ),
+      );
+      addTearDown(agent.close);
+
+      final harness = _AuthHarness(
+        identityAgent: agent,
+        algorithms: _legacyAlgorithms,
+        serverSigAlgs: const {'rsa-sha2-256', 'ssh-ed25519'},
+        acceptedPublicKeyAlgorithms: const {
+          'rsa-sha2-256-cert-v01@openssh.com',
+        },
+        authorizedPublicKeys: [certBlob],
+        customVerifier: (algo, pubBlob, challenge, sigBlob) {
+          final sig = SSHRsaSignature.decode(sigBlob);
+          return algo == 'rsa-sha2-256-cert-v01@openssh.com' &&
+              sig.type == SSHRsaSignatureType.sha256 &&
+              rsaPub.verify(challenge, sig);
+        },
+      );
+
+      await harness.run();
+      expect(harness.probedAlgorithms, ['rsa-sha2-256-cert-v01@openssh.com']);
+      expect(harness.signedAlgorithms, ['rsa-sha2-256-cert-v01@openssh.com']);
       harness.close();
     });
 
@@ -674,6 +754,219 @@ void main() {
       harness.close();
     });
   });
+
+  group('RFC 8308 EXT_INFO transport handling', () {
+    Uint8List encodeExtInfo(List<(String, List<int>)> entries) {
+      final writer = SSHMessageWriter()
+        ..writeUint8(7)
+        ..writeUint32(entries.length);
+      for (final (name, value) in entries) {
+        writer
+          ..writeUtf8(name)
+          ..writeString(Uint8List.fromList(value));
+      }
+      return writer.takeBytes();
+    }
+
+    Future<SSHTransport> kexReadyTransport() async {
+      final server = TestKexServer();
+      final hostKey = nacl.SigningKey.generate();
+      final transport = TestKexServer.client(onVerifyHostKey: (_, __) => true);
+      addTearDown(transport.close);
+      await server.exchange(transport, signer: hostKey);
+      return transport;
+    }
+
+    test('advertises ext-info-c in initial KEXINIT and parses server-sig-algs',
+        () async {
+      final transport = await kexReadyTransport();
+
+      final initialKex = SSH_Message_KexInit.decode(transport.localKexInit!);
+      expect(initialKex.kexAlgorithms, contains('ext-info-c'));
+
+      // Initial NEWKEYS followed by an Ignore and then EXT_INFO.
+      await transport.handleMessage(SSH_Message_Ignore(Uint8List(0)).encode());
+      await transport.handleMessage(
+        encodeExtInfo([
+          ('binary-ext@example.com', [0xff, 0xfe, 0x00]),
+          ('server-sig-algs', utf8.encode('ssh-ed25519,rsa-sha2-256')),
+        ]),
+      );
+
+      expect(
+        transport.serverSigAlgs,
+        equals({'ssh-ed25519', 'rsa-sha2-256'}),
+      );
+
+      // A later EXT_INFO cannot overwrite server-sig-algs.
+      await transport.handleMessage(
+        encodeExtInfo([
+          ('server-sig-algs', utf8.encode('ssh-rsa')),
+        ]),
+      );
+      expect(
+        transport.serverSigAlgs,
+        equals({'ssh-ed25519', 'rsa-sha2-256'}),
+      );
+
+      // Rekey KEXINIT must omit ext-info-c (RFC 8308 §2.1).
+      await transport.handleMessageKexInit(TestKexServer().kexInit);
+      final rekeyKex = SSH_Message_KexInit.decode(transport.localKexInit!);
+      expect(rekeyKex.kexAlgorithms, isNot(contains('ext-info-c')));
+    });
+
+    test('ignores EXT_INFO after non-ignore traffic and malformed payloads',
+        () async {
+      final transport = await kexReadyTransport();
+      // Non-ignore message closes the RFC 8308 post-NEWKEYS window.
+      await transport.handleMessage(
+        SSH_Message_Service_Accept('ssh-userauth').encode(),
+      );
+      await transport.handleMessage(
+        encodeExtInfo([
+          ('server-sig-algs', utf8.encode('ssh-rsa')),
+        ]),
+      );
+      expect(transport.serverSigAlgs, isNull);
+
+      // Malformed EXT_INFO payload on a fresh transport must not throw.
+      final transport2 = await kexReadyTransport();
+      await transport2.handleMessage(
+        Uint8List.fromList([7, 0xff, 0xff, 0xff, 0xff]),
+      );
+      expect(transport2.serverSigAlgs, isNull);
+
+      // Truncated second entry after valid server-sig-algs must not partially
+      // commit serverSigAlgs.
+      final transport3 = await kexReadyTransport();
+      final partialBad = (SSHMessageWriter()
+            ..writeUint8(7)
+            ..writeUint32(2)
+            ..writeUtf8('server-sig-algs')
+            ..writeString(Uint8List.fromList(utf8.encode('ssh-rsa')))
+            ..writeUtf8('broken')
+            ..writeUint32(999)) // declared 999 bytes, none present
+          .takeBytes();
+      await transport3.handleMessage(partialBad);
+      expect(transport3.serverSigAlgs, isNull);
+
+      // Duplicate extension name (RFC 8308 §2.3 violation) must be rejected.
+      final transport4 = await kexReadyTransport();
+      await transport4.handleMessage(
+        encodeExtInfo([
+          ('server-sig-algs', utf8.encode('rsa-sha2-256')),
+          ('server-sig-algs', utf8.encode('ssh-rsa')),
+        ]),
+      );
+      expect(transport4.serverSigAlgs, isNull);
+
+      // Empty server-sig-algs value leaves serverSigAlgs null.
+      final transport5 = await kexReadyTransport();
+      await transport5.handleMessage(
+        encodeExtInfo([
+          ('server-sig-algs', utf8.encode(',,')),
+        ]),
+      );
+      expect(transport5.serverSigAlgs, isNull);
+
+      // Count exceeding actual entries (truncated after 1st entry) is rejected.
+      final transport6 = await kexReadyTransport();
+      final truncatedCount = (SSHMessageWriter()
+            ..writeUint8(7)
+            ..writeUint32(2)
+            ..writeUtf8('server-sig-algs')
+            ..writeString(Uint8List.fromList(utf8.encode('ssh-rsa'))))
+          .takeBytes();
+      await transport6.handleMessage(truncatedCount);
+      expect(transport6.serverSigAlgs, isNull);
+    });
+
+    test(
+        'ignores pre-NEWKEYS EXT_INFO, post-rekey EXT_INFO, and omits '
+        'ext-info-c in server mode', () async {
+      // Pre-NEWKEYS plaintext EXT_INFO must be ignored.
+      final preKex = TestKexServer.client(onVerifyHostKey: (_, __) => true);
+      addTearDown(preKex.close);
+      await preKex.handleMessage(
+        encodeExtInfo([
+          ('server-sig-algs', utf8.encode('ssh-rsa')),
+        ]),
+      );
+      expect(preKex.serverSigAlgs, isNull);
+
+      // Post-rekey second NEWKEYS must not re-open EXT_INFO window.
+      final server = TestKexServer();
+      final hostKey = nacl.SigningKey.generate();
+      final transport = TestKexServer.client(onVerifyHostKey: (_, __) => true);
+      addTearDown(transport.close);
+      await server.exchange(transport, signer: hostKey);
+      // Close initial window without EXT_INFO.
+      await transport.handleMessage(
+        SSH_Message_Service_Accept('ssh-userauth').encode(),
+      );
+      // Complete a rekey (second NEWKEYS) and send EXT_INFO.
+      await server.exchange(transport, signer: hostKey);
+      await transport.handleMessage(
+        encodeExtInfo([
+          ('server-sig-algs', utf8.encode('ssh-rsa')),
+        ]),
+      );
+      expect(transport.serverSigAlgs, isNull);
+
+      // Server-mode transport must not advertise ext-info-c.
+      final serverSocket = _LoopbackPacketSocket((_) {});
+      final serverTransport = SSHTransport(serverSocket, isServer: true);
+      addTearDown(serverTransport.close);
+      serverTransport.receivedVersion('SSH-2.0-TestClient');
+      await serverTransport.handleMessageKexInit(TestKexServer().kexInit);
+      final serverKex =
+          SSH_Message_KexInit.decode(serverTransport.localKexInit!);
+      expect(serverKex.kexAlgorithms, isNot(contains('ext-info-c')));
+    });
+
+    test(
+        'groups custom signers by key for both RFC 8308 and MaxAuthTries=6 '
+        'fallback', () async {
+      // Modern RFC 8308 server advertising rsa-sha2-256 + ssh-rsa: custom
+      // signers for rsaPem must not send a redundant ssh-rsa probe.
+      final modern = _AuthHarness(
+        signers: [
+          rsaPem.signerFor('rsa-sha2-256')!,
+          rsaPem.signerFor('ssh-rsa')!,
+          ed25519.signer,
+        ],
+        algorithms: _legacyAlgorithms,
+        serverSigAlgs: const {'rsa-sha2-256', 'ssh-rsa', 'ssh-ed25519'},
+        acceptedPublicKeyAlgorithms: const {'ssh-ed25519', 'rsa-sha2-256'},
+        authorizedPublicKeys: [ed25519.toPublicKey().encode()],
+      );
+      await modern.run();
+      expect(modern.probedAlgorithms, ['rsa-sha2-256', 'ssh-ed25519']);
+      expect(modern.signedAlgorithms, ['ssh-ed25519']);
+      modern.close();
+
+      // Pre-RFC-8308 server with 6 custom RSA signer pairs: first RSA key
+      // reaches ssh-rsa on probe #2, well before MaxAuthTries=6.
+      final legacy = _AuthHarness(
+        signers: [
+          rsaPem.signerFor('rsa-sha2-256')!,
+          rsaPem.signerFor('ssh-rsa')!,
+          for (var i = 0; i < 5; i++) ...[
+            rsaOther.signerFor('rsa-sha2-256')!,
+            rsaOther.signerFor('ssh-rsa')!,
+          ],
+        ],
+        algorithms: _legacyAlgorithms,
+        acceptedPublicKeyAlgorithms: const {'ssh-rsa'},
+        authorizedPublicKeys: [rsaPem.toPublicKey().encode()],
+        maxAuthFailures: 6,
+      );
+      await legacy.run();
+      expect(legacy.probedAlgorithms, ['rsa-sha2-256', 'ssh-rsa']);
+      expect(legacy.signedAlgorithms, ['ssh-rsa']);
+      legacy.close();
+    });
+  });
 }
 
 class _AuthHarness {
@@ -683,6 +976,8 @@ class _AuthHarness {
     SSHAgentClient? identityAgent,
     SSHAlgorithms algorithms = const SSHAlgorithms(),
     SSHUserInfoRequestHandler? onUserInfoRequest,
+    Set<String>? serverSigAlgs,
+    this.maxAuthFailures,
     required this.acceptedPublicKeyAlgorithms,
     required this.authorizedPublicKeys,
     this.partialSuccessNextMethods,
@@ -703,12 +998,14 @@ class _AuthHarness {
     );
     client.transport
       ..sessionId = _sessionId
+      ..setServerSigAlgs(serverSigAlgs)
       ..kexInProgress = false;
   }
 
   static final _sessionId =
       Uint8List.fromList(List<int>.generate(32, (i) => i));
 
+  final int? maxAuthFailures;
   final Set<String> acceptedPublicKeyAlgorithms;
   final List<Uint8List> authorizedPublicKeys;
   final List<String>? partialSuccessNextMethods;
@@ -725,6 +1022,7 @@ class _AuthHarness {
   final signedAlgorithms = <String>[];
   var keyboardInteractiveRequested = false;
   var _partialSucceededOnce = false;
+  var _authFailures = 0;
 
   late final _LoopbackPacketSocket _socket;
   late final SSHClient client;
@@ -800,6 +1098,11 @@ class _AuthHarness {
           ).encode(),
         );
       } else {
+        _authFailures++;
+        if (maxAuthFailures != null && _authFailures >= maxAuthFailures!) {
+          client.close();
+          return;
+        }
         client.handlePacket(
           SSH_Message_Userauth_Failure(
             methodsLeft: failureMethodsAfterPublicKeyProbe,

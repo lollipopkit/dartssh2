@@ -20,6 +20,8 @@ extension SSHTransportTesting on SSHTransport {
   set sharedSecret(BigInt? value) => _sharedSecret = value;
   set exchangeHash(Uint8List? value) => _exchangeHash = value;
   set sessionId(Uint8List? value) => _sessionId = value;
+  void setServerSigAlgs(Set<String>? value) => _serverSigAlgs = value;
+  Future<void> handleMessage(Uint8List payload) => _handleMessage(payload);
 
   bool get kexInProgress => _kexInProgress;
   set kexInProgress(bool value) => _kexInProgress = value;

@@ -333,21 +333,12 @@ class SSHClient {
       (error, stackTrace) => _transport.closeWithError(error, stackTrace),
     );
 
-    for (final key in identities ?? const <SSHKeyPair>[]) {
-      _enqueueKeyPair(key);
-    }
-    // Every `identities`, `signers`, and `identityAgent` entry is filtered
-    // against `algorithms.pubkey` so retired algorithms (such as SHA-1
-    // `ssh-rsa`) are never sent unless explicitly enabled. Callers supplying a
-    // custom `SSHSigner` with a non-standard algorithm name can opt it in via
-    // `SSHPubkeyType.custom(...)`.
-    for (final signer in signers ?? const <SSHSigner>[]) {
-      if (signer is SSHAgentIdentity) {
-        _enqueueAgentIdentity(signer);
-      } else if (algorithms.pubkey.any((algo) => algo.name == signer.type)) {
-        _enqueueSigner(signer);
-      }
-    }
+    _identitiesSnapshot = List<SSHKeyPair>.unmodifiable(
+      identities ?? const <SSHKeyPair>[],
+    );
+    _signersSnapshot = List<SSHSigner>.unmodifiable(
+      signers ?? const <SSHSigner>[],
+    );
 
     if (hostbasedIdentities != null) {
       _hostbasedKeyPairsLeft.addAll(hostbasedIdentities!);
@@ -389,6 +380,9 @@ class SSHClient {
 
   final String _ident;
 
+  late final List<SSHKeyPair> _identitiesSnapshot;
+  late final List<SSHSigner> _signersSnapshot;
+
   final _hostbasedKeyPairsLeft = Queue<SSHKeyPair>();
   Timer? _authTimeoutTimer;
   Timer? _handshakeTimeoutTimer;
@@ -411,10 +405,6 @@ class SSHClient {
   final _authMethodsLeft = Queue<SSHAuthMethod>();
 
   final _signersLeft = Queue<SSHSigner>();
-
-  /// Legacy SHA-1 RSA fallbacks queued behind all modern signers so a modern
-  /// server authenticates with SHA-256/Ed25519/ECDSA before SHA-1 is ever tried.
-  final _legacySignersLeft = Queue<SSHSigner>();
 
   /// The key last offered without a signature, until the server answers.
   SSHSigner? _offered;
@@ -1519,23 +1509,22 @@ class SSHClient {
   }
 
   void _startAuthentication() => _catch(() async {
-        await _addAgentKeys();
-        if (!_transport.isClosed) _beginAuthentication();
+        final agentIdentities = await _fetchAgentKeys();
+        if (!_transport.isClosed) _beginAuthentication(agentIdentities);
       });
 
   /// [identityAgent]'s keys, asked for once its connection is bound here.
-  Future<void> _addAgentKeys() async {
+  Future<List<SSHAgentIdentity>> _fetchAgentKeys() async {
     final agent = identityAgent;
-    if (agent == null) return;
+    if (agent == null) return const [];
     try {
       final binding = _transport.sessionBinding;
       if (binding != null) await agent.bind(binding, forwarding: false);
-      for (final identity in await agent.identities()) {
-        _enqueueAgentIdentity(identity);
-      }
+      return await agent.identities();
     } catch (e) {
       printDebug?.call('SSHClient: the agent offers no keys: $e');
       _signError = e;
+      return const [];
     }
   }
 
@@ -1574,39 +1563,163 @@ class SSHClient {
     return rsaA != null && rsaB != null && rsaA.e == rsaB.e && rsaA.n == rsaB.n;
   }
 
-  void _enqueueSigner(SSHSigner signer) {
-    if (_isLegacySha1Algorithm(signer.type)) {
-      _legacySignersLeft.add(signer);
-    } else {
-      _signersLeft.add(signer);
-    }
-  }
-
-  void _enqueueKeyPair(SSHKeyPair key) {
-    final seen = <String>{};
-    for (final algo in algorithms.pubkey) {
-      if (algo.isCertificate || !seen.add(algo.name)) continue;
-      final signer = key.signerFor(algo.name);
-      if (signer != null) _enqueueSigner(signer);
-    }
-  }
-
-  void _enqueueAgentIdentity(SSHAgentIdentity identity) {
+  List<SSHPubkeyType> _orderedPubkeyAlgorithms() {
+    final modern = <SSHPubkeyType>[];
+    final legacy = <SSHPubkeyType>[];
     final seen = <String>{};
     for (final algo in algorithms.pubkey) {
       if (!seen.add(algo.name)) continue;
-      final signer = identity.signerFor(algo.name);
-      if (signer != null) _enqueueSigner(signer);
+      if (_isLegacySha1Algorithm(algo.name)) {
+        legacy.add(algo);
+      } else {
+        modern.add(algo);
+      }
     }
+    return [...modern, ...legacy];
   }
 
-  void _beginAuthentication() {
+  /// Checks whether [algo] is accepted by the server's RFC 8308
+  /// `server-sig-algs`. Per RFC 8308 §3.1, servers advertise plain signature
+  /// algorithm names (e.g. `rsa-sha2-256`) that also cover their certificate
+  /// variants (`rsa-sha2-256-cert-v01@openssh.com`).
+  static bool _serverAcceptsPubkey(
+    Set<String> serverSigAlgs,
+    SSHPubkeyType algo,
+  ) =>
+      serverSigAlgs.contains(algo.name) ||
+      serverSigAlgs.contains(algo.keyType.name);
+
+  /// Populates [_signersLeft] once `NEWKEYS`, any RFC 8308 `SSH_MSG_EXT_INFO`,
+  /// and agent key discovery have finished.
+  ///
+  /// Every `identities`, `signers`, and `identityAgent` entry is filtered
+  /// against `algorithms.pubkey` (callers with non-standard algorithm names
+  /// can opt them in via `SSHPubkeyType.custom`).
+  ///
+  /// - When the server sent `server-sig-algs`, each key uses only its best
+  ///   mutually supported algorithm, so modern servers never see SHA-1 probes.
+  /// - When the server sent no `EXT_INFO` (pre-RFC-8308 legacy daemons), each
+  ///   key tries its modern algorithms before its SHA-1 fallback so an early
+  ///   authorized RSA key reaches `ssh-rsa` before `MaxAuthTries` is exhausted.
+  void _enqueueSignersForAuth(List<SSHAgentIdentity> agentIdentities) {
+    final orderedAlgos = _orderedPubkeyAlgorithms();
+    final serverSigAlgs = _transport.serverSigAlgs;
+
+    void enqueueKeyPair(SSHKeyPair key) {
+      for (final algo in orderedAlgos) {
+        if (algo.isCertificate) continue;
+        if (serverSigAlgs != null &&
+            !_serverAcceptsPubkey(serverSigAlgs, algo)) {
+          continue;
+        }
+        final signer = key.signerFor(algo.name);
+        if (signer != null) {
+          _signersLeft.add(signer);
+          if (serverSigAlgs != null) break;
+        }
+      }
+    }
+
+    void enqueueAgentIdentity(SSHAgentIdentity identity) {
+      for (final algo in orderedAlgos) {
+        if (serverSigAlgs != null &&
+            !_serverAcceptsPubkey(serverSigAlgs, algo)) {
+          continue;
+        }
+        final signer = identity.signerFor(algo.name);
+        if (signer != null) {
+          _signersLeft.add(signer);
+          if (serverSigAlgs != null) break;
+        }
+      }
+    }
+
+    for (final key in _identitiesSnapshot) {
+      enqueueKeyPair(key);
+    }
+
+    // Group non-agent custom signers by public key so modern and SHA-1
+    // variants of the same key follow the exact same scheduling rules as
+    // `identities` and `identityAgent` (single best match when the server
+    // advertised `server-sig-algs`; per-key fallback otherwise; standalone
+    // SHA-1 signers deferred behind modern keys).
+    final customGroups =
+        <({Uint8List keyBlob, List<({SSHSigner signer, int rank})> entries})>[];
+    final deferredCustomSha1 = <SSHSigner>[];
+
+    void flushCustomGroups() {
+      for (final group in customGroups) {
+        group.entries.sort((a, b) => a.rank.compareTo(b.rank));
+        if (serverSigAlgs != null) {
+          _signersLeft.add(group.entries.first.signer);
+        } else {
+          final hasModern =
+              group.entries.any((e) => !_isLegacySha1Algorithm(e.signer.type));
+          if (hasModern) {
+            for (final entry in group.entries) {
+              _signersLeft.add(entry.signer);
+            }
+          } else {
+            for (final entry in group.entries) {
+              deferredCustomSha1.add(entry.signer);
+            }
+          }
+        }
+      }
+      customGroups.clear();
+    }
+
+    for (final signer in _signersSnapshot) {
+      if (signer is SSHAgentIdentity) {
+        flushCustomGroups();
+        enqueueAgentIdentity(signer);
+        continue;
+      }
+      var matchedIndex = -1;
+      for (var i = 0; i < orderedAlgos.length; i++) {
+        if (orderedAlgos[i].name == signer.type) {
+          matchedIndex = i;
+          break;
+        }
+      }
+      if (matchedIndex < 0) continue;
+      if (serverSigAlgs != null &&
+          !_serverAcceptsPubkey(serverSigAlgs, orderedAlgos[matchedIndex])) {
+        continue;
+      }
+      final keyBlob = Uint8List.fromList(signer.publicKey);
+      ({
+        Uint8List keyBlob,
+        List<({SSHSigner signer, int rank})> entries
+      })? existing;
+      for (final group in customGroups) {
+        if (_samePublicKey(group.keyBlob, keyBlob)) {
+          existing = group;
+          break;
+        }
+      }
+      if (existing != null) {
+        existing.entries.add((signer: signer, rank: matchedIndex));
+      } else {
+        customGroups.add((
+          keyBlob: keyBlob,
+          entries: [(signer: signer, rank: matchedIndex)],
+        ));
+      }
+    }
+    flushCustomGroups();
+
+    for (final identity in agentIdentities) {
+      enqueueAgentIdentity(identity);
+    }
+
+    _signersLeft.addAll(deferredCustomSha1);
+  }
+
+  void _beginAuthentication(List<SSHAgentIdentity> agentIdentities) {
     printDebug?.call('SSHClient._startAuthentication');
 
-    if (_legacySignersLeft.isNotEmpty) {
-      _signersLeft.addAll(_legacySignersLeft);
-      _legacySignersLeft.clear();
-    }
+    _enqueueSignersForAuth(agentIdentities);
 
     // RFC 4252: Check transport layer security before enabling password auth
     final hasConfidentiality = _hasConfidentiality;
