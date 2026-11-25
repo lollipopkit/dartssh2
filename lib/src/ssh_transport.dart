@@ -196,8 +196,28 @@ class SSHTransport {
   /// key — so a re-key cannot bring a different one in without being asked.
   Uint8List? _verifiedHostPublicKey;
 
+  /// RFC 8308 `SSH_MSG_EXT_INFO` message number.
+  static const _msgExtInfo = 7;
+
   /// Whether the transport ready callback has been dispatched.
   var _readyDispatched = false;
+
+  /// Whether the initial `SSH_MSG_NEWKEYS` from the peer has been processed.
+  var _initialNewKeysDone = false;
+
+  /// True immediately after the initial `SSH_MSG_NEWKEYS` until the first
+  /// non-ignore/non-debug message arrives, which is the only window where
+  /// RFC 8308 §2.4 permits the server's `SSH_MSG_EXT_INFO` (`server-sig-algs`).
+  var _extInfoExpected = false;
+
+  /// Signature algorithms advertised by the server in RFC 8308
+  /// `SSH_MSG_EXT_INFO` (`server-sig-algs`), or `null` when the server did not
+  /// send one.
+  Set<String>? _serverSigAlgs;
+
+  /// Signature algorithms the server advertised via RFC 8308 `server-sig-algs`,
+  /// or `null` if the server did not send `EXT_INFO` with `server-sig-algs`.
+  Set<String>? get serverSigAlgs => _serverSigAlgs;
 
   /// Shared secret derived from the key exchange process. Kept to derive the
   /// cipher IV, cipher key and MAC key.
@@ -1397,8 +1417,16 @@ class SSHTransport {
     _kexInProgress = true;
     _sentKexInit = true;
 
+    final kexAlgorithms = algorithms.kex.toNameList();
+    // RFC 8308 §2.1: advertise `ext-info-c` in the initial client KEXINIT only.
+    if (isClient &&
+        _sessionId == null &&
+        !kexAlgorithms.contains('ext-info-c')) {
+      kexAlgorithms.add('ext-info-c');
+    }
+
     final message = SSH_Message_KexInit(
-      kexAlgorithms: algorithms.kex.toNameList(),
+      kexAlgorithms: kexAlgorithms,
       // kexAlgorithms: ['curve25519-sha256'],
       serverHostKeyAlgorithms: algorithms.hostkey.toNameList(),
       encryptionClientToServer: algorithms.cipher.toNameList(),
@@ -1501,6 +1529,21 @@ class SSHTransport {
     }
 
     final messageId = SSHMessage.readMessageId(message);
+    if (messageId == _msgExtInfo) {
+      // RFC 8308: SSH_MSG_EXT_INFO. Only accept `server-sig-algs` in the
+      // initial post-NEWKEYS window; consume any later EXT_INFO silently.
+      if (isClient && _extInfoExpected) {
+        _extInfoExpected = false;
+        _handleMessageExtInfo(message);
+      }
+      return;
+    }
+    if (_extInfoExpected &&
+        messageId != SSH_Message_Ignore.messageId &&
+        messageId != SSH_Message_Debug.messageId) {
+      _extInfoExpected = false;
+    }
+
     switch (messageId) {
       case SSH_Message_KexInit.messageId:
         return _handleMessageKexInit(message);
@@ -1511,6 +1554,55 @@ class SSHTransport {
         return _handleMessageNewKeys(message);
       default:
         onPacket?.call(message);
+    }
+  }
+
+  void _handleMessageExtInfo(Uint8List payload) {
+    printDebug?.call('SSHTransport._handleMessageExtInfo');
+    try {
+      final reader = SSHMessageReader(payload);
+      reader.skip(1); // _msgExtInfo
+      final count = reader.readUint32();
+      // Each (string name, string value) entry takes at least 8 bytes for the
+      // two uint32 length prefixes; reject impossible counts in O(1).
+      if (count > (payload.length - reader.offset) ~/ 8) {
+        printDebug?.call(
+          'SSHTransport: ignoring EXT_INFO with truncated count $count',
+        );
+        return;
+      }
+      Set<String>? parsedServerSigAlgs;
+      final seenNames = <String>{};
+      for (var i = 0; i < count; i++) {
+        final name = reader.readUtf8(allowMalformed: true);
+        final value = reader.readString();
+        // RFC 8308 §2.3: extension names must not be repeated.
+        if (!seenNames.add(name)) {
+          printDebug?.call(
+            'SSHTransport: ignoring EXT_INFO with duplicate extension "$name"',
+          );
+          return;
+        }
+        if (name == 'server-sig-algs') {
+          final parsed = utf8
+              .decode(value, allowMalformed: true)
+              .split(',')
+              .where((s) => s.isNotEmpty)
+              .toSet();
+          if (parsed.isNotEmpty) {
+            parsedServerSigAlgs = Set.unmodifiable(parsed);
+          }
+        }
+      }
+      if (!reader.isDone) {
+        printDebug?.call('SSHTransport: ignoring EXT_INFO with trailing bytes');
+        return;
+      }
+      if (parsedServerSigAlgs != null) {
+        _serverSigAlgs = parsedServerSigAlgs;
+      }
+    } catch (e) {
+      printDebug?.call('SSHTransport: ignoring malformed EXT_INFO: $e');
     }
   }
 
@@ -1865,6 +1957,11 @@ class SSHTransport {
     printTrace?.call('<- $socket: SSH_Message_NewKeys');
 
     _applyRemoteKeys();
+
+    if (!_initialNewKeysDone) {
+      _initialNewKeysDone = true;
+      _extInfoExpected = isClient;
+    }
 
     // Key exchange round finished.
     _kexInProgress = false;
