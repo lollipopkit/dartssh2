@@ -37,6 +37,9 @@ void main() {
   final rsaPem =
       SSHKeyPair.fromPem(fixture('ssh-rsa/id_rsa', normalizeNewlines: true))
           .single as RsaPrivateKey;
+  final rsaOther = SSHKeyPair.fromPem(
+    fixture('ssh-rsa/ssh_host_rsa_key', normalizeNewlines: true),
+  ).single as SSHRsaKeyPair;
   final rsaOpenSsh = SSHKeyPair.fromPem(
     fixture('ssh-rsa/id_rsa.openssh', normalizeNewlines: true),
   ).single as OpenSSHRsaKeyPair;
@@ -466,17 +469,185 @@ void main() {
       harness.close();
     });
 
+    test('supports custom signer algorithm names via SSHPubkeyType.custom',
+        () async {
+      const customAlgo = 'custom-sig@example.com';
+      final blob = _syntheticKeyBlob(customAlgo);
+      final sig = Uint8List.fromList([0xca, 0xfe, 0xba, 0xbe]);
+      final customSigner = _CallbackSigner(
+        type: customAlgo,
+        publicKey: blob,
+        onSign: (_) async => sig,
+      );
+
+      // Rejected when not listed in algorithms.pubkey.
+      final rejected = _AuthHarness(
+        signers: [customSigner],
+        algorithms: const SSHAlgorithms(),
+        acceptedPublicKeyAlgorithms: const {customAlgo},
+        authorizedPublicKeys: [blob],
+        customVerifier: (algo, pub, challenge, s) =>
+            algo == customAlgo && _bytesEqual(s, sig),
+      );
+      await expectLater(rejected.run(), throwsA(isA<SSHAuthFailError>()));
+      expect(rejected.probedAlgorithms, isEmpty);
+      rejected.close();
+
+      // Accepted when explicitly opted in via SSHPubkeyType.custom.
+      final accepted = _AuthHarness(
+        signers: [customSigner],
+        algorithms: const SSHAlgorithms(
+          pubkey: [SSHPubkeyType.custom(customAlgo)],
+        ),
+        acceptedPublicKeyAlgorithms: const {customAlgo},
+        authorizedPublicKeys: [blob],
+        customVerifier: (algo, pub, challenge, s) =>
+            algo == customAlgo && _bytesEqual(s, sig),
+      );
+      await accepted.run();
+      expect(accepted.probedAlgorithms, [customAlgo]);
+      expect(accepted.signedAlgorithms, [customAlgo]);
+      accepted.close();
+    });
+
     test(
-        'drops remaining ssh-rsa fallback for already-authenticated key on '
+        'drops remaining RSA fallbacks for already-authenticated key on '
         'partialSuccess publickey,publickey', () async {
+      // rsa-sha2-256 and rsa-sha2-512 both precede ed25519 in `_signersLeft`,
+      // and the server accepts both RSA algorithms — so without pruning,
+      // rsa-sha2-512 would be probed before ed25519.
       final harness = _AuthHarness(
         identities: [rsaPem, ed25519],
-        algorithms: _legacyAlgorithms,
-        acceptedPublicKeyAlgorithms: const {'rsa-sha2-256', 'ssh-ed25519'},
+        algorithms: const SSHAlgorithms(
+          pubkey: [
+            SSHPubkeyType.rsaSha256,
+            SSHPubkeyType.rsaSha512,
+            SSHPubkeyType.ed25519,
+          ],
+        ),
+        acceptedPublicKeyAlgorithms: const {
+          'rsa-sha2-256',
+          'rsa-sha2-512',
+          'ssh-ed25519',
+        },
         authorizedPublicKeys: [
           rsaPem.toPublicKey().encode(),
           ed25519.toPublicKey().encode(),
         ],
+        partialSuccessNextMethods: const ['publickey'],
+      );
+
+      await harness.run();
+      expect(harness.probedAlgorithms, ['rsa-sha2-256', 'ssh-ed25519']);
+      expect(harness.signedAlgorithms, ['rsa-sha2-256', 'ssh-ed25519']);
+      harness.close();
+
+      // With a single RSA key and legacy enabled, partialSuccess prunes its
+      // ssh-rsa fallback instead of probing it again.
+      final singleKey = _AuthHarness(
+        identities: [rsaPem],
+        algorithms: _legacyAlgorithms,
+        acceptedPublicKeyAlgorithms: const {'rsa-sha2-256', 'ssh-rsa'},
+        authorizedPublicKeys: [rsaPem.toPublicKey().encode()],
+        partialSuccessNextMethods: const ['publickey'],
+      );
+
+      await expectLater(singleKey.run(), throwsA(isA<SSHAuthFailError>()));
+      expect(singleKey.probedAlgorithms, ['rsa-sha2-256']);
+      expect(singleKey.signedAlgorithms, ['rsa-sha2-256']);
+      singleKey.close();
+    });
+
+    test(
+        'prunes plain and cert RSA variants with matching (e, n) on '
+        'partialSuccess while keeping distinct RSA keys', () async {
+      final rsaPub = rsaPem.toPublicKey() as SSHRsaPublicKey;
+      final otherPub = rsaOther.toPublicKey() as SSHRsaPublicKey;
+      expect(otherPub.n, isNot(rsaPub.n));
+      final certBlob = _syntheticRsaCertBlob(rsaPub.e, rsaPub.n);
+      final otherBlob = otherPub.encode();
+
+      final agent = _agentClient(
+        _SyntheticAgent(
+          identities: [
+            (blob: certBlob, comment: 'rsa-cert'),
+            (blob: rsaPub.encode(), comment: 'same-rsa-plain'),
+            (blob: otherBlob, comment: 'distinct-rsa'),
+          ],
+          onSign: (blob, data, flags) {
+            final key = _bytesEqual(blob, otherBlob) ? rsaOther : rsaPem;
+            return key.signWith(data, SSHRsaSignatureType.sha256).encode();
+          },
+        ),
+      );
+      addTearDown(agent.close);
+
+      final probedBlobs = <Uint8List>[];
+      final harness = _AuthHarness(
+        identityAgent: agent,
+        algorithms: _legacyAlgorithms,
+        acceptedPublicKeyAlgorithms: const {
+          'rsa-sha2-256-cert-v01@openssh.com',
+          'rsa-sha2-256',
+          'ssh-rsa',
+        },
+        authorizedPublicKeys: [certBlob, rsaPub.encode(), otherBlob],
+        partialSuccessNextMethods: const ['publickey'],
+        onProbe: (algo, blob) => probedBlobs.add(Uint8List.fromList(blob)),
+        customVerifier: (algo, pubBlob, challenge, sigBlob) {
+          final sig = SSHRsaSignature.decode(sigBlob);
+          final pub = _bytesEqual(pubBlob, otherBlob)
+              ? rsaOther.toPublicKey() as SSHRsaPublicKey
+              : rsaPub;
+          return pub.verify(challenge, sig);
+        },
+      );
+
+      await harness.run();
+      expect(
+        harness.probedAlgorithms,
+        ['rsa-sha2-256-cert-v01@openssh.com', 'rsa-sha2-256'],
+      );
+      // Second probe must be the distinct RSA key, not the plain variant of
+      // the already-authenticated certificate key.
+      expect(probedBlobs.length, 2);
+      expect(_bytesEqual(probedBlobs[0], certBlob), isTrue);
+      expect(_bytesEqual(probedBlobs[1], otherBlob), isTrue);
+      harness.close();
+    });
+
+    test(
+        'snapshots signer publicKey so in-place mutation during sign() cannot '
+        'defeat partialSuccess pruning', () async {
+      final originalBlob = rsaPem.toPublicKey().encode();
+      final mutableBlob = Uint8List.fromList(originalBlob);
+      final mutatingPrimary = _CallbackSigner(
+        type: 'rsa-sha2-256',
+        publicKey: mutableBlob,
+        onSign: (challenge) async {
+          final sig = rsaPem.signWith(challenge, 'rsa-sha2-256').encode();
+          // Mutate the caller-owned buffer in place during signing.
+          mutableBlob.fillRange(0, mutableBlob.length, 0);
+          return sig;
+        },
+      );
+      final fallbackSameKey = rsaPem.signerFor('rsa-sha2-512')!;
+
+      final harness = _AuthHarness(
+        signers: [mutatingPrimary, fallbackSameKey, ed25519.signer],
+        algorithms: const SSHAlgorithms(
+          pubkey: [
+            SSHPubkeyType.rsaSha256,
+            SSHPubkeyType.rsaSha512,
+            SSHPubkeyType.ed25519,
+          ],
+        ),
+        acceptedPublicKeyAlgorithms: const {
+          'rsa-sha2-256',
+          'rsa-sha2-512',
+          'ssh-ed25519',
+        },
+        authorizedPublicKeys: [originalBlob, ed25519.toPublicKey().encode()],
         partialSuccessNextMethods: const ['publickey'],
       );
 
@@ -516,6 +687,7 @@ class _AuthHarness {
     required this.authorizedPublicKeys,
     this.partialSuccessNextMethods,
     this.failureMethodsAfterPublicKeyProbe = const ['publickey'],
+    this.onProbe,
     this.customVerifier,
   }) {
     _socket = _LoopbackPacketSocket(_onClientPacket);
@@ -541,6 +713,7 @@ class _AuthHarness {
   final List<Uint8List> authorizedPublicKeys;
   final List<String>? partialSuccessNextMethods;
   final List<String> failureMethodsAfterPublicKeyProbe;
+  final void Function(String algorithm, Uint8List publicKey)? onProbe;
   final bool Function(
     String algorithm,
     Uint8List publicKey,
@@ -618,6 +791,7 @@ class _AuthHarness {
 
     if (!hasSignature) {
       probedAlgorithms.add(algorithm);
+      onProbe?.call(algorithm, publicKey);
       if (keyAuthorized && algoAllowed) {
         client.handlePacket(
           SSH_Message_Userauth_Pk_Ok(
@@ -697,6 +871,34 @@ Uint8List _syntheticKeyBlob(String keyType) {
         ..writeUtf8(keyType)
         ..writeString(Uint8List.fromList([0xde, 0xad, 0xbe, 0xef])))
       .takeBytes();
+}
+
+Uint8List _syntheticRsaCertBlob(BigInt e, BigInt n) {
+  return (SSHMessageWriter()
+        ..writeUtf8('ssh-rsa-cert-v01@openssh.com')
+        ..writeString(Uint8List(32)) // nonce
+        ..writeMpint(e)
+        ..writeMpint(n))
+      .takeBytes();
+}
+
+class _CallbackSigner implements SSHSigner {
+  _CallbackSigner({
+    required this.type,
+    required this.publicKey,
+    required this.onSign,
+  });
+
+  @override
+  final String type;
+
+  @override
+  final Uint8List publicKey;
+
+  final Future<Uint8List> Function(Uint8List data) onSign;
+
+  @override
+  Future<Uint8List> sign(Uint8List data) => onSign(data);
 }
 
 class _SyntheticAgent implements SSHAgentHandler {

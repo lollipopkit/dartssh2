@@ -336,6 +336,11 @@ class SSHClient {
     for (final key in identities ?? const <SSHKeyPair>[]) {
       _enqueueKeyPair(key);
     }
+    // Every `identities`, `signers`, and `identityAgent` entry is filtered
+    // against `algorithms.pubkey` so retired algorithms (such as SHA-1
+    // `ssh-rsa`) are never sent unless explicitly enabled. Callers supplying a
+    // custom `SSHSigner` with a non-standard algorithm name can opt it in via
+    // `SSHPubkeyType.custom(...)`.
     for (final signer in signers ?? const <SSHSigner>[]) {
       if (signer is SSHAgentIdentity) {
         _enqueueAgentIdentity(signer);
@@ -1076,7 +1081,7 @@ class SSHClient {
     final signedKey = _lastSignedPublicKey;
     _lastSignedPublicKey = null;
     if (message.partialSuccess && signedKey != null) {
-      _signersLeft.removeWhere((s) => s.publicKey.equals(signedKey));
+      _signersLeft.removeWhere((s) => _samePublicKey(s.publicKey, signedKey));
     }
 
     // RFC 4252: Process the list of methods that can continue
@@ -1538,6 +1543,37 @@ class SSHClient {
       algorithm == SSHPubkeyType.rsaSha1.name ||
       algorithm == SSHPubkeyType.rsaSha1Cert.name;
 
+  static ({BigInt e, BigInt n})? _tryExtractRsaKey(Uint8List blob) {
+    try {
+      final reader = SSHMessageReader(blob);
+      final type = reader.readUtf8();
+      if (type == 'ssh-rsa') {
+        final e = reader.readMpint();
+        final n = reader.readMpint();
+        return (e: e, n: n);
+      }
+      if (type == 'ssh-rsa-cert-v01@openssh.com') {
+        reader.readString(); // nonce
+        final e = reader.readMpint();
+        final n = reader.readMpint();
+        return (e: e, n: n);
+      }
+    } catch (_) {
+      // Malformed or non-standard blob: fall back to raw byte equality.
+    }
+    return null;
+  }
+
+  /// Matches two wire public-key blobs as OpenSSH's `sshkey_equal_public` does
+  /// for RSA: plain `ssh-rsa` keys and `ssh-rsa-cert-v01@openssh.com`
+  /// certificates sharing the same `(e, n)` represent the same underlying key.
+  static bool _samePublicKey(Uint8List a, Uint8List b) {
+    if (a.equals(b)) return true;
+    final rsaA = _tryExtractRsaKey(a);
+    final rsaB = _tryExtractRsaKey(b);
+    return rsaA != null && rsaB != null && rsaA.e == rsaB.e && rsaA.n == rsaB.n;
+  }
+
   void _enqueueSigner(SSHSigner signer) {
     if (_isLegacySha1Algorithm(signer.type)) {
       _legacySignersLeft.add(signer);
@@ -1729,9 +1765,13 @@ class SSHClient {
 
     final signer = _offered;
     _offered = null;
+    final publicKey =
+        signer == null ? null : Uint8List.fromList(signer.publicKey);
     // The algorithm is not compared: a server may echo the blob's own name
     // (`ssh-rsa`) for the `rsa-sha2-256` offered.
-    if (signer == null || !message.publicKey.equals(signer.publicKey)) {
+    if (signer == null ||
+        publicKey == null ||
+        !message.publicKey.equals(publicKey)) {
       printDebug?.call('SSHClient: PK_OK for a key not offered');
       return _tryNextAuthMethod();
     }
@@ -1740,7 +1780,7 @@ class SSHClient {
       username: username,
       service: 'ssh-connection',
       publicKeyAlgorithm: signer.type,
-      publicKey: signer.publicKey,
+      publicKey: publicKey,
     );
 
     final Uint8List signature;
@@ -1754,12 +1794,12 @@ class SSHClient {
     }
     if (_transport.isClosed) return;
 
-    _lastSignedPublicKey = signer.publicKey;
+    _lastSignedPublicKey = publicKey;
     _sendMessage(
       SSH_Message_Userauth_Request.publicKey(
         username: username,
         publicKeyAlgorithm: signer.type,
-        publicKey: signer.publicKey,
+        publicKey: publicKey,
         signature: signature,
       ),
     );

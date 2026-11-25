@@ -41,6 +41,10 @@ class SSHPubkeyType extends SSHAlgorithm {
 
   const SSHPubkeyType._(this.name, [this.certified]);
 
+  /// A caller-defined algorithm name for custom or vendor [SSHSigner]
+  /// implementations not covered by the built-in constants.
+  const SSHPubkeyType.custom(this.name) : certified = null;
+
   @override
   final String name;
 
