@@ -1596,16 +1596,39 @@ class SSHClient {
   /// against `algorithms.pubkey` (callers with non-standard algorithm names
   /// can opt them in via `SSHPubkeyType.custom`).
   ///
-  /// - When the server sent `server-sig-algs`, each key uses only its best
-  ///   mutually supported algorithm, so modern servers never see SHA-1 probes.
+  /// - When the server sent `server-sig-algs`, each key's best mutually
+  ///   supported algorithm is queued first, with any remaining mutually
+  ///   supported alternatives preserved behind all primary candidates (modern
+  ///   alternatives before SHA-1) so signing failures or per-user `Match`
+  ///   restrictions can still fall back while modern servers never see SHA-1
+  ///   probes on success.
   /// - When the server sent no `EXT_INFO` (pre-RFC-8308 legacy daemons), each
   ///   key tries its modern algorithms before its SHA-1 fallback so an early
   ///   authorized RSA key reaches `ssh-rsa` before `MaxAuthTries` is exhausted.
   void _enqueueSignersForAuth(List<SSHAgentIdentity> agentIdentities) {
     final orderedAlgos = _orderedPubkeyAlgorithms();
     final serverSigAlgs = _transport.serverSigAlgs;
+    final deferredModernFallbacks = <SSHSigner>[];
+    final deferredSha1Fallbacks = <SSHSigner>[];
+
+    void enqueueCandidates(List<SSHSigner> candidates) {
+      if (candidates.isEmpty) return;
+      if (serverSigAlgs != null) {
+        _signersLeft.add(candidates.first);
+        for (final fallback in candidates.skip(1)) {
+          if (_isLegacySha1Algorithm(fallback.type)) {
+            deferredSha1Fallbacks.add(fallback);
+          } else {
+            deferredModernFallbacks.add(fallback);
+          }
+        }
+      } else {
+        _signersLeft.addAll(candidates);
+      }
+    }
 
     void enqueueKeyPair(SSHKeyPair key) {
+      final candidates = <SSHSigner>[];
       for (final algo in orderedAlgos) {
         if (algo.isCertificate) continue;
         if (serverSigAlgs != null &&
@@ -1613,57 +1636,44 @@ class SSHClient {
           continue;
         }
         final signer = key.signerFor(algo.name);
-        if (signer != null) {
-          _signersLeft.add(signer);
-          if (serverSigAlgs != null) break;
-        }
+        if (signer != null) candidates.add(signer);
       }
+      enqueueCandidates(candidates);
     }
 
     void enqueueAgentIdentity(SSHAgentIdentity identity) {
+      final candidates = <SSHSigner>[];
       for (final algo in orderedAlgos) {
         if (serverSigAlgs != null &&
             !_serverAcceptsPubkey(serverSigAlgs, algo)) {
           continue;
         }
         final signer = identity.signerFor(algo.name);
-        if (signer != null) {
-          _signersLeft.add(signer);
-          if (serverSigAlgs != null) break;
-        }
+        if (signer != null) candidates.add(signer);
       }
+      enqueueCandidates(candidates);
     }
 
     for (final key in _identitiesSnapshot) {
       enqueueKeyPair(key);
     }
 
-    // Group non-agent custom signers by public key so modern and SHA-1
-    // variants of the same key follow the exact same scheduling rules as
-    // `identities` and `identityAgent` (single best match when the server
-    // advertised `server-sig-algs`; per-key fallback otherwise; standalone
-    // SHA-1 signers deferred behind modern keys).
+    // Group non-agent custom signers only by exact wire blob so a plain RSA
+    // key and its certificate remain distinct credentials (unlike post-
+    // `partialSuccess` pruning, which uses `_samePublicKey`).
     final customGroups =
         <({Uint8List keyBlob, List<({SSHSigner signer, int rank})> entries})>[];
-    final deferredCustomSha1 = <SSHSigner>[];
 
     void flushCustomGroups() {
       for (final group in customGroups) {
         group.entries.sort((a, b) => a.rank.compareTo(b.rank));
-        if (serverSigAlgs != null) {
-          _signersLeft.add(group.entries.first.signer);
+        final hasModern =
+            group.entries.any((e) => !_isLegacySha1Algorithm(e.signer.type));
+        final ordered = [for (final entry in group.entries) entry.signer];
+        if (!hasModern) {
+          deferredSha1Fallbacks.addAll(ordered);
         } else {
-          final hasModern =
-              group.entries.any((e) => !_isLegacySha1Algorithm(e.signer.type));
-          if (hasModern) {
-            for (final entry in group.entries) {
-              _signersLeft.add(entry.signer);
-            }
-          } else {
-            for (final entry in group.entries) {
-              deferredCustomSha1.add(entry.signer);
-            }
-          }
+          enqueueCandidates(ordered);
         }
       }
       customGroups.clear();
@@ -1693,7 +1703,7 @@ class SSHClient {
         List<({SSHSigner signer, int rank})> entries
       })? existing;
       for (final group in customGroups) {
-        if (_samePublicKey(group.keyBlob, keyBlob)) {
+        if (group.keyBlob.equals(keyBlob)) {
           existing = group;
           break;
         }
@@ -1713,7 +1723,9 @@ class SSHClient {
       enqueueAgentIdentity(identity);
     }
 
-    _signersLeft.addAll(deferredCustomSha1);
+    _signersLeft
+      ..addAll(deferredModernFallbacks)
+      ..addAll(deferredSha1Fallbacks);
   }
 
   void _beginAuthentication(List<SSHAgentIdentity> agentIdentities) {

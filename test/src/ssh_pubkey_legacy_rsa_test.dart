@@ -966,6 +966,100 @@ void main() {
       expect(legacy.signedAlgorithms, ['ssh-rsa']);
       legacy.close();
     });
+
+    test(
+        'keeps plain RSA key and its RSA cert as separate credentials in '
+        'custom signers', () async {
+      final rsaPub = rsaPem.toPublicKey() as SSHRsaPublicKey;
+      final certBlob = _syntheticRsaCertBlob(rsaPub.e, rsaPub.n);
+      final plainBlob = rsaPub.encode();
+      final certSigner = _CallbackSigner(
+        type: 'rsa-sha2-256-cert-v01@openssh.com',
+        publicKey: certBlob,
+        onSign: (data) async =>
+            rsaPem.signWith(data, SSHRsaSignatureType.sha256).encode(),
+      );
+      final plainSigner = rsaPem.signerFor('rsa-sha2-256')!;
+
+      // Server advertises rsa-sha2-256 globally, rejects the cert (not
+      // authorized), and accepts only the plain RSA key.
+      final harness = _AuthHarness(
+        signers: [certSigner, plainSigner],
+        algorithms: _legacyAlgorithms,
+        serverSigAlgs: const {'rsa-sha2-256', 'ssh-rsa'},
+        acceptedPublicKeyAlgorithms: const {
+          'rsa-sha2-256-cert-v01@openssh.com',
+          'rsa-sha2-256',
+        },
+        authorizedPublicKeys: [plainBlob],
+      );
+
+      await harness.run();
+      expect(
+        harness.probedAlgorithms,
+        ['rsa-sha2-256-cert-v01@openssh.com', 'rsa-sha2-256'],
+      );
+      expect(harness.signedAlgorithms, ['rsa-sha2-256']);
+      harness.close();
+    });
+
+    test(
+        'preserves server-sig-algs fallback candidates across per-user '
+        'rejection and agent signing failures', () async {
+      // Case 1: global server-sig-algs advertises rsa-sha2-256 + rsa-sha2-512
+      // + ssh-rsa, but per-user Match rejects rsa-sha2-256 and accepts
+      // rsa-sha2-512 (tried before ssh-rsa).
+      final perUserOverride = _AuthHarness(
+        identities: [rsaPem],
+        algorithms: const SSHAlgorithms(
+          pubkey: [
+            SSHPubkeyType.rsaSha256,
+            SSHPubkeyType.rsaSha512,
+            SSHPubkeyType.rsaSha1,
+          ],
+        ),
+        serverSigAlgs: const {'rsa-sha2-256', 'rsa-sha2-512', 'ssh-rsa'},
+        acceptedPublicKeyAlgorithms: const {'rsa-sha2-512', 'ssh-rsa'},
+        authorizedPublicKeys: [rsaPem.toPublicKey().encode()],
+      );
+      await perUserOverride.run();
+      expect(
+        perUserOverride.probedAlgorithms,
+        ['rsa-sha2-256', 'rsa-sha2-512'],
+      );
+      expect(perUserOverride.signedAlgorithms, ['rsa-sha2-512']);
+      perUserOverride.close();
+
+      // Case 2: old agent fails when asked to sign with rsa-sha2-256 flag,
+      // and succeeds when falling back to ssh-rsa (flags == 0).
+      final rsaBlob = rsaPem.toPublicKey().encode();
+      final flakyAgent = _agentClient(
+        _SyntheticAgent(
+          identities: [(blob: rsaBlob, comment: 'old-agent')],
+          onSign: (blob, data, flags) {
+            if (flags != 0) {
+              // Simulate an old agent refusing RSA SHA-2 flags (SSH_AGENT_FAILURE).
+              return Uint8List(0);
+            }
+            return rsaPem.signWith(data, SSHRsaSignatureType.sha1).encode();
+          },
+          failSignWhen: (flags) => flags != 0,
+        ),
+      );
+      addTearDown(flakyAgent.close);
+
+      final agentFallback = _AuthHarness(
+        identityAgent: flakyAgent,
+        algorithms: _legacyAlgorithms,
+        serverSigAlgs: const {'rsa-sha2-256', 'ssh-rsa'},
+        acceptedPublicKeyAlgorithms: const {'rsa-sha2-256', 'ssh-rsa'},
+        authorizedPublicKeys: [rsaBlob],
+      );
+      await agentFallback.run();
+      expect(agentFallback.probedAlgorithms, ['rsa-sha2-256', 'ssh-rsa']);
+      expect(agentFallback.signedAlgorithms, ['ssh-rsa']);
+      agentFallback.close();
+    });
   });
 }
 
@@ -1208,10 +1302,12 @@ class _SyntheticAgent implements SSHAgentHandler {
   _SyntheticAgent({
     required this.identities,
     required this.onSign,
+    this.failSignWhen,
   });
 
   final List<({Uint8List blob, String comment})> identities;
   final Uint8List Function(Uint8List blob, Uint8List data, int flags) onSign;
+  final bool Function(int flags)? failSignWhen;
 
   @override
   Future<Uint8List> handleRequest(Uint8List request) async {
@@ -1231,6 +1327,9 @@ class _SyntheticAgent implements SSHAgentHandler {
         final blob = reader.readString();
         final data = reader.readString();
         final flags = reader.readUint32();
+        if (failSignWhen?.call(flags) == true) {
+          return Uint8List.fromList([SSHAgentProtocol.failure]);
+        }
         final sig = onSign(blob, data, flags);
         return (SSHMessageWriter()
               ..writeUint8(SSHAgentProtocol.signResponse)
