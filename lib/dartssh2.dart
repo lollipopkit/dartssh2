@@ -24,6 +24,7 @@ export 'src/algorithm/ssh_crypto_backend.dart';
 // an implementer of that interface has to be measured against.
 export 'src/utils/cipher_ext.dart' show BlockCipherX;
 export 'src/algorithm/ssh_hostkey_type.dart';
+export 'src/algorithm/ssh_pubkey_type.dart';
 export 'src/algorithm/ssh_kex_type.dart';
 export 'src/algorithm/ssh_mac_type.dart';
 

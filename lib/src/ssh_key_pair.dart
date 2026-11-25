@@ -113,6 +113,12 @@ abstract class SSHKeyPair {
   String toPem();
 }
 
+/// An RSA key pair capable of signing under any RSA signature algorithm
+/// (`rsa-sha2-256`, `rsa-sha2-512`, or legacy SHA-1 `ssh-rsa`).
+abstract interface class SSHRsaKeyPair implements SSHKeyPair {
+  SSHRsaSignature signWith(Uint8List data, String signatureType);
+}
+
 class OpenSSHKeyPairs {
   static const magic = 'openssh-key-v1';
 
@@ -429,7 +435,7 @@ abstract mixin class OpenSSHKeyPair implements SSHKeyPair {
   }
 }
 
-class OpenSSHRsaKeyPair with OpenSSHKeyPair {
+class OpenSSHRsaKeyPair with OpenSSHKeyPair implements SSHRsaKeyPair {
   @override
   final name = 'ssh-rsa';
 
@@ -473,17 +479,18 @@ class OpenSSHRsaKeyPair with OpenSSHKeyPair {
   }
 
   @override
-  SSHRsaSignature sign(Uint8List data) {
-    final signer = RSASigner(SHA256Digest(), '0609608648016503040201');
+  SSHRsaSignature sign(Uint8List data) => signWith(data, type);
 
-    signer.init(
-      true,
-      PrivateKeyParameter<RSAPrivateKey>(
-        RSAPrivateKey(n, d, p, q),
-      ),
+  @override
+  SSHRsaSignature signWith(Uint8List data, String signatureType) {
+    return signRsaWithType(
+      n: n,
+      d: d,
+      p: p,
+      q: q,
+      data: data,
+      signatureType: signatureType,
     );
-
-    return SSHRsaSignature(type, signer.generateSignature(data).bytes);
   }
 
   @override
@@ -763,7 +770,7 @@ class RsaKeyPairDEKInfo {
   }
 }
 
-class RsaPrivateKey implements SSHKeyPair {
+class RsaPrivateKey implements SSHRsaKeyPair {
   @override
   final name = 'ssh-rsa';
 
@@ -825,17 +832,18 @@ class RsaPrivateKey implements SSHKeyPair {
   }
 
   @override
-  SSHRsaSignature sign(Uint8List data) {
-    final signer = RSASigner(SHA256Digest(), '0609608648016503040201');
+  SSHRsaSignature sign(Uint8List data) => signWith(data, type);
 
-    signer.init(
-      true,
-      PrivateKeyParameter<RSAPrivateKey>(
-        RSAPrivateKey(n, d, p, q),
-      ),
+  @override
+  SSHRsaSignature signWith(Uint8List data, String signatureType) {
+    return signRsaWithType(
+      n: n,
+      d: d,
+      p: p,
+      q: q,
+      data: data,
+      signatureType: signatureType,
     );
-
-    return SSHRsaSignature(type, signer.generateSignature(data).bytes);
   }
 
   @override

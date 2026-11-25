@@ -241,24 +241,86 @@ class SSHAgentIdentity implements SSHSigner {
         _ => keyType,
       };
 
-  @override
-  Future<Uint8List> sign(Uint8List data) async {
-    final signature = await _agent.sign(
-      publicKey,
-      data,
-      flags: _isRsa ? SSHAgentProtocol.rsaSha2_256 : 0,
+  /// A signer using [algorithm] for this agent key, or `null` if this key
+  /// cannot sign under [algorithm].
+  SSHSigner? signerFor(String algorithm) {
+    if (!_isRsa) {
+      return algorithm == type ? this : null;
+    }
+    final isCert = keyType == 'ssh-rsa-cert-v01@openssh.com';
+    final spec = switch ((isCert, algorithm)) {
+      (false, 'rsa-sha2-256') ||
+      (true, 'rsa-sha2-256-cert-v01@openssh.com') =>
+        (flags: SSHAgentProtocol.rsaSha2_256, expected: 'rsa-sha2-256'),
+      (false, 'rsa-sha2-512') ||
+      (true, 'rsa-sha2-512-cert-v01@openssh.com') =>
+        (flags: SSHAgentProtocol.rsaSha2_512, expected: 'rsa-sha2-512'),
+      (false, 'ssh-rsa') || (true, 'ssh-rsa-cert-v01@openssh.com') => (
+          flags: 0,
+          expected: 'ssh-rsa'
+        ),
+      _ => null,
+    };
+    if (spec == null) return null;
+    if (algorithm == type) return this;
+    return _AgentAlgorithmSigner(
+      this,
+      algorithm,
+      flags: spec.flags,
+      expectedSignatureType: spec.expected,
     );
-    // An agent that ignores the flag signs SHA-1, which the server would
-    // refuse with no reason given.
-    if (_isRsa) {
+  }
+
+  Future<Uint8List> _signWithFlags(
+    Uint8List data, {
+    required int flags,
+    String? expectedSignatureType,
+  }) async {
+    final signature = await _agent.sign(publicKey, data, flags: flags);
+    if (expectedSignatureType != null) {
       final signed = SSHAgentClient._keyType(signature);
-      if (signed != 'rsa-sha2-256') {
-        throw SSHAgentError('the agent signed $signed, not rsa-sha2-256');
+      if (signed != expectedSignatureType) {
+        throw SSHAgentError(
+          'the agent signed $signed, not $expectedSignatureType',
+        );
       }
     }
     return signature;
   }
 
   @override
+  Future<Uint8List> sign(Uint8List data) => _signWithFlags(
+        data,
+        flags: _isRsa ? SSHAgentProtocol.rsaSha2_256 : 0,
+        expectedSignatureType: _isRsa ? 'rsa-sha2-256' : null,
+      );
+
+  @override
   String toString() => 'SSHAgentIdentity($keyType, $comment)';
+}
+
+class _AgentAlgorithmSigner implements SSHSigner {
+  _AgentAlgorithmSigner(
+    this._identity,
+    this.type, {
+    required this.flags,
+    required this.expectedSignatureType,
+  });
+
+  final SSHAgentIdentity _identity;
+  final int flags;
+  final String expectedSignatureType;
+
+  @override
+  final String type;
+
+  @override
+  Uint8List get publicKey => _identity.publicKey;
+
+  @override
+  Future<Uint8List> sign(Uint8List data) => _identity._signWithFlags(
+        data,
+        flags: flags,
+        expectedSignatureType: expectedSignatureType,
+      );
 }

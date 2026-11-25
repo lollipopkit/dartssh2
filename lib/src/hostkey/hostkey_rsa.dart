@@ -43,21 +43,7 @@ class SSHRsaPublicKey implements SSHHostKey {
   }
 
   bool verify(Uint8List message, SSHRsaSignature signature) {
-    late RSASigner signer;
-
-    switch (signature.type) {
-      case SSHRsaSignatureType.sha1:
-        signer = RSASigner(SHA1Digest(), '06052b0e03021a');
-        break;
-      case SSHRsaSignatureType.sha256:
-        signer = RSASigner(SHA256Digest(), '0609608648016503040201');
-        break;
-      case SSHRsaSignatureType.sha512:
-        signer = RSASigner(SHA512Digest(), '0609608648016503040203');
-        break;
-      default:
-        throw FormatException('Unknown signature type: ${signature.type}');
-    }
+    final signer = rsaSignerForType(signature.type);
 
     signer.init(
       false,
@@ -85,6 +71,37 @@ abstract class SSHRsaSignatureType {
   static const sha1 = 'ssh-rsa';
   static const sha256 = 'rsa-sha2-256';
   static const sha512 = 'rsa-sha2-512';
+}
+
+RSASigner rsaSignerForType(String signatureType) {
+  switch (signatureType) {
+    case SSHRsaSignatureType.sha1:
+      return RSASigner(SHA1Digest(), '06052b0e03021a');
+    case SSHRsaSignatureType.sha256:
+      return RSASigner(SHA256Digest(), '0609608648016503040201');
+    case SSHRsaSignatureType.sha512:
+      return RSASigner(SHA512Digest(), '0609608648016503040203');
+    default:
+      throw FormatException('Unknown signature type: $signatureType');
+  }
+}
+
+SSHRsaSignature signRsaWithType({
+  required BigInt n,
+  required BigInt d,
+  required BigInt p,
+  required BigInt q,
+  required Uint8List data,
+  required String signatureType,
+}) {
+  final signer = rsaSignerForType(signatureType);
+  signer.init(
+    true,
+    PrivateKeyParameter<asymmetric.RSAPrivateKey>(
+      asymmetric.RSAPrivateKey(n, d, p, q),
+    ),
+  );
+  return SSHRsaSignature(signatureType, signer.generateSignature(data).bytes);
 }
 
 class SSHRsaSignature implements SSHSignature {
