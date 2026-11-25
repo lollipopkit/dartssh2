@@ -2,6 +2,7 @@ import 'package:dartssh2/src/algorithm/ssh_cipher_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_hostkey_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_kex_type.dart';
 import 'package:dartssh2/src/algorithm/ssh_mac_type.dart';
+import 'package:dartssh2/src/algorithm/ssh_pubkey_type.dart';
 
 abstract class SSHAlgorithm {
   String get name;
@@ -82,6 +83,12 @@ class SSHAlgorithms {
   /// Algorithm used for the host key.
   final List<SSHHostkeyType> hostkey;
 
+  /// Signature algorithms offered for client `publickey` authentication.
+  ///
+  /// Defaults to modern algorithms only; SHA-1 `ssh-rsa` must be opted into
+  /// explicitly for legacy daemons that predate RFC 8332.
+  final List<SSHPubkeyType> pubkey;
+
   /// Algorithm used for the encryption.
   final List<SSHCipherType> cipher;
 
@@ -119,6 +126,26 @@ class SSHAlgorithms {
       SSHHostkeyType.rsaSha512,
       SSHHostkeyType.rsaSha256Cert,
       SSHHostkeyType.rsaSha256,
+    ],
+    // RFC 8332 mandates `rsa-sha2-256` on compliant servers (`rsa-sha2-512`
+    // remains optional), so only `rsa-sha2-256` is offered by default to avoid
+    // doubling failed probes on embedded daemons with low `MaxAuthTries`.
+    // Legacy SHA-1 `ssh-rsa` is opt-in only.
+    this.pubkey = const [
+      SSHPubkeyType.ed25519Cert,
+      SSHPubkeyType.ed25519,
+      SSHPubkeyType.skEd25519Cert,
+      SSHPubkeyType.skEd25519,
+      SSHPubkeyType.ecdsa521Cert,
+      SSHPubkeyType.ecdsa521,
+      SSHPubkeyType.ecdsa384Cert,
+      SSHPubkeyType.ecdsa384,
+      SSHPubkeyType.ecdsa256Cert,
+      SSHPubkeyType.ecdsa256,
+      SSHPubkeyType.skEcdsa256Cert,
+      SSHPubkeyType.skEcdsa256,
+      SSHPubkeyType.rsaSha256Cert,
+      SSHPubkeyType.rsaSha256,
     ],
 
     /// CTR first for the widest interoperability, then ChaCha20-Poly1305,

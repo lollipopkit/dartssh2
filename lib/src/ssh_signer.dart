@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
 import 'package:dartssh2/src/ssh_key_pair.dart';
 
 /// One key `publickey` authentication can offer, wherever its private half is
@@ -23,6 +24,21 @@ abstract class SSHSigner {
 
 extension SSHKeyPairSigner on SSHKeyPair {
   SSHSigner get signer => _KeyPairSigner(this);
+
+  /// A signer using [algorithm] for this key, or `null` if this key cannot sign
+  /// under [algorithm].
+  SSHSigner? signerFor(String algorithm) {
+    final self = this;
+    if (self is SSHRsaKeyPair) {
+      if (algorithm == SSHRsaSignatureType.sha256 ||
+          algorithm == SSHRsaSignatureType.sha512 ||
+          algorithm == SSHRsaSignatureType.sha1) {
+        return _RsaKeyPairSigner(self, algorithm);
+      }
+      return null;
+    }
+    return algorithm == type ? signer : null;
+  }
 }
 
 class _KeyPairSigner implements SSHSigner {
@@ -38,4 +54,20 @@ class _KeyPairSigner implements SSHSigner {
 
   @override
   Future<Uint8List> sign(Uint8List data) async => _keyPair.sign(data).encode();
+}
+
+class _RsaKeyPairSigner implements SSHSigner {
+  _RsaKeyPairSigner(this._keyPair, this.type);
+
+  final SSHRsaKeyPair _keyPair;
+
+  @override
+  final String type;
+
+  @override
+  late final Uint8List publicKey = _keyPair.toPublicKey().encode();
+
+  @override
+  Future<Uint8List> sign(Uint8List data) async =>
+      _keyPair.signWith(data, type).encode();
 }
